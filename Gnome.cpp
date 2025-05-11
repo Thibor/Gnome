@@ -54,18 +54,19 @@ struct SOptions {
 
 	string bishop = "32 56";
 	string king = "52 39";
-	string material = "-27 11 22 -34 33";
+	string material = "-27 13 22 -34 33";
 	string outFile = "2 -6 -3 -5 6 -4 -6 -2 -4 -1 12 -16";
 	string outRank = "1 -7 -17 1 -17 -6 5 5 -9 11 16 -22";
 	string passed = "-5 8 -49 -4 4";
-	string pawnProtection = "11 14 11 20 -6 18 -3 13 -5 17 -47 20";
+	string pawn = "3 7 -24 -26 -8 -21 -10 -1";
+	string pawnProtection = "11 14 11 20 -6 18 -3 13 -5 17 -46 20";
 	string rook = "72 1 30 12";
 
 };
 
 enum Tracing { NO_TRACE, TRACE };
 
-enum Term { PASSED = 6, TERM_NB };
+enum Term { PASSED = 6,STRUCTURE, TERM_NB };
 
 int scores[TERM_NB][2];
 
@@ -135,7 +136,10 @@ int materialValOrg[PT_NB] = { 100,320,330,500,900,0 };
 int max_material[PT_NB] = {};
 int material[PT_NB] = {};
 int pawnProtection[PT_NB] = {};
-int pawn_doubled = S(-24, -26);
+int pawnConnected = 0;
+int pawnDoubled = 0;
+int pawnIsolated = 0;
+int pawnBehind = 0;
 int passedFile = 0;
 int passedRank = 0;
 int passedBlocked = 0;
@@ -192,36 +196,36 @@ auto count(const U64 bb) {
 	//return popcount(bb);
 }
 
-auto east(const U64 bb) {
+U64 east(const U64 bb) {
 	return (bb << 1) & ~0x0101010101010101ULL;
 }
 
-auto west(const U64 bb) {
+U64 west(const U64 bb) {
 	return (bb >> 1) & ~0x8080808080808080ULL;
 }
 
-U64 north(const U64 bb) {
+U64 North(const U64 bb) {
 	return bb << 8;
 }
 
-U64 south(const U64 bb) {
+U64 South(const U64 bb) {
 	return bb >> 8;
 }
 
 U64 nw(const U64 bb) {
-	return north(west(bb));
+	return North(west(bb));
 }
 
 U64 ne(const U64 bb) {
-	return north(east(bb));
+	return North(east(bb));
 }
 
 U64 sw(const U64 bb) {
-	return south(west(bb));
+	return South(west(bb));
 }
 
 U64 se(const U64 bb) {
-	return south(east(bb));
+	return South(east(bb));
 }
 
 auto operator==(const Move& lhs, const Move& rhs) {
@@ -319,7 +323,7 @@ auto bishop(const int sq, const U64 blockers) {
 }
 
 auto rook(const int sq, const U64 blockers) {
-	return ray(sq, blockers, north) | ray(sq, blockers, east) | ray(sq, blockers, south) | ray(sq, blockers, west);
+	return ray(sq, blockers, North) | ray(sq, blockers, east) | ray(sq, blockers, South) | ray(sq, blockers, west);
 }
 
 U64 king(const int sq, const U64) {
@@ -440,9 +444,9 @@ static int MoveGen(const Position& pos, Move* const movelist, const bool only_ca
 	const U64 to_mask = only_captures ? pos.color[1] : ~pos.color[0];
 	const U64 pawns = pos.color[0] & pos.pieces[PAWN];
 	generate_pawn_moves(
-		movelist, num_moves, north(pawns) & ~all & (only_captures ? 0xFF00000000000000ULL : 0xFFFFFFFFFFFF0000ULL), -8);
+		movelist, num_moves, North(pawns) & ~all & (only_captures ? 0xFF00000000000000ULL : 0xFFFFFFFFFFFF0000ULL), -8);
 	if (!only_captures) {
-		generate_pawn_moves(movelist, num_moves, north(north(pawns & 0xFF00ULL) & ~all) & ~all, -16);
+		generate_pawn_moves(movelist, num_moves, North(North(pawns & 0xFF00ULL) & ~all) & ~all, -16);
 	}
 	generate_pawn_moves(movelist, num_moves, nw(pawns) & (pos.color[1] | pos.ep), -7);
 	generate_pawn_moves(movelist, num_moves, ne(pawns) & (pos.color[1] | pos.ep), -9);
@@ -508,12 +512,13 @@ static int Eval(Position& pos) {
 	for (int c = 0; c < 2; ++c) {
 		// our pawns, their pawns
 		const U64 pawns[] = { pos.color[0] & pos.pieces[PAWN], pos.color[1] & pos.pieces[PAWN] };
-		const U64 protected_by_pawns = nw(pawns[0]) | ne(pawns[0]);
+		const U64 bbProtected = nw(pawns[0]) | ne(pawns[0]);
 		const U64 attacked_by_pawns = se(pawns[1]) | sw(pawns[1]);
 		//const int kings[] = { lsb(pos.colour[0] & pos.pieces[KING]), lsb(pos.colour[1] & pos.pieces[KING]) };
 		const auto my_k_pos = lsb(pos.color[0] & pos.pieces[KING]);
 		const auto their_k_pos = lsb(pos.color[1] & pos.pieces[KING]);
-
+		U64 bbConnected = bbProtected | South(bbProtected);
+		bbConnected |= South(bbConnected);
 		// Bishop pair
 		if (count(pos.color[0] & pos.pieces[BISHOP]) == 2) {
 			score += bishopPair;
@@ -531,19 +536,20 @@ static int Eval(Position& pos) {
 				const int file = sq % 8;
 				score += bonus[p][rank][file];
 				if (T)
-					scores[p][pos.flipped] = bonus[p][rank][file];
+					scores[p][pos.flipped] += bonus[p][rank][file];
 				const U64 piece_bb = 1ULL << sq;
-				if (piece_bb & protected_by_pawns) {
+				if (piece_bb & bbProtected) {
 					score += pawnProtection[p];
 				}
 				if (p == PAWN) {
 					// Passed pawns
-					U64 blockers = 0x101010101010100ULL << sq;
-					blockers |= west(blockers) | east(blockers);
+					U64 bbFile = 0x101010101010101ULL << file;
+					U64 bbForward = 0x101010101010100ULL << sq;
+					U64 blockers = bbForward | west(bbForward) | east(bbForward);
 					if (!(blockers & pawns[1])) {
 						int v = OutsideFile(file) * passedFile;
 						v += PassedRank(rank - 1) * passedRank;
-						if (north(piece_bb) & pos.color[1])
+						if (North(piece_bb) & pos.color[1])
 							v += passedBlocked;
 						// King defense/attack
 						// king distance to square in front of passer
@@ -556,16 +562,32 @@ static int Eval(Position& pos) {
 						int sq2 = sq + 8;
 						v += Distance(sq2, my_k_pos) * passedKU;
 						v += Distance(sq2, their_k_pos) * passedKE;
-						//cout << "passed " << sq <<" "<<sq2<< endl;
 						score += S(v >> 1, v);
 						if (T)
 							scores[PASSED][pos.flipped] = S(v >> 1, v);
 					}
-
+					int structure = 0;
 					// Doubled pawns
-					if ((north(piece_bb) | north(north(piece_bb))) & pawns[0]) {
-						score += pawn_doubled;
+					if (bbForward & pawns[0]) {
+						structure += pawnDoubled;
 					}
+					if (bbConnected & pawns[0]) {
+						structure += pawnConnected;
+					}
+					else {
+						U64 bbAdjacent = east(bbFile) | west(bbFile);
+						if (!(bbAdjacent & pawns[0])) {
+							structure += pawnIsolated;
+						}
+						else {
+							bbAdjacent &= North(bbProtected);
+							if (bbAdjacent & pawns[0] && bbAdjacent & pawns[1])
+								structure += pawnBehind;
+						}
+					}
+					score += structure;
+					if (T)
+						scores[STRUCTURE][pos.flipped] = structure;
 				}
 				else if (p == ROOK) {
 					// Rook on open or semi-open files
@@ -580,9 +602,9 @@ static int Eval(Position& pos) {
 					}
 				}
 				else if (p == KING && (rank < 3 || rank>4)) {
-					U64 bbShield1 = north(sq);
+					U64 bbShield1 = North(sq);
 					bbShield1 |= east(bbShield1) | west(bbShield1);
-					U64 bbShield2 = north(bbShield1);
+					U64 bbShield2 = North(bbShield1);
 					int v1 = kingShield1 * count(bbShield1 & pawns[0]);
 					int v2 = kingShield2 * count(bbShield2 & pawns[0]);
 					score += S(v1 + v2, 0);
@@ -745,7 +767,7 @@ static int alphabeta(Position& pos,
 	}
 
 	// Exit early if out of time
-	if (stop || Now() >= stop_time) {
+	if (stop || (ply > 0 && Now() >= stop_time)) {
 		return 0;
 	}
 
@@ -1185,6 +1207,20 @@ static void InitEval() {
 	eg = GetVal(split, 1);
 	bishopPair = S(mg, eg);
 
+	SplitInt(options.pawn, split, ' ');
+	mg = GetVal(split, 0);
+	eg = GetVal(split, 1);
+	pawnConnected = S(mg, eg);
+	mg = GetVal(split, 2);
+	eg = GetVal(split, 3);
+	pawnDoubled = S(mg, eg);
+	mg = GetVal(split, 4);
+	eg = GetVal(split, 5);
+	pawnIsolated = S(mg, eg);
+	mg = GetVal(split, 6);
+	eg = GetVal(split, 7);
+	pawnBehind = S(mg, eg);
+
 	SplitInt(options.king, split, ' ');
 	kingShield1 = GetVal(split, 0);
 	kingShield2 = GetVal(split, 1);
@@ -1324,6 +1360,7 @@ static void UciEval() {
 	PrintTerm("Queen", QUEEN);
 	PrintTerm("King", KING);
 	PrintTerm("Passed", PASSED);
+	PrintTerm("Structure", STRUCTURE);
 	cout << "phase " << phase << endl;
 	cout << "score " << score << endl;
 
@@ -1351,6 +1388,7 @@ static void UciCommand(string str) {
 		cout << "option name material type string default " << options.material << endl;
 		cout << "option name outFile type string default " << options.outFile << endl;
 		cout << "option name outRank type string default " << options.outRank << endl;
+		cout << "option name pawn type string default " << options.pawn << endl;
 		cout << "option name pawnProtection type string default " << options.pawnProtection << endl;
 		cout << "option name rook type string default " << options.rook << endl;
 		cout << "uciok" << endl;
@@ -1385,6 +1423,8 @@ static void UciCommand(string str) {
 				options.outFile = value;
 			else if (name == "outRank")
 				options.outRank = value;
+			else if (name == "pawn")
+				options.pawn = value;
 			else if (name == "pawnProtection")
 				options.pawnProtection = value;
 			else if (name == "rook")
