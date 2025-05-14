@@ -39,7 +39,8 @@ using namespace std;
 #define YEAR ((__DATE__[7]-'0') * 1000 + (__DATE__[8]-'0') * 100 + (__DATE__[9]-'0') * 10 + (__DATE__[10]-'0') * 1)
 
 string name = "Gnome";
-const std::string DEFAULT_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq -";
+string defFen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq -";
+string tstFen = "1k6/1pp1R1p1/4P3/4b1P1/5p2/3q4/1P2R1PK/8 b - - 0 1";
 
 static void PrintWelcome() {
 	cout << name << " " << YEAR << "-" << MONTH << "-" << DAY << endl;
@@ -52,21 +53,23 @@ struct SOptions {
 	int threads = 1;
 	U64 hash = 64ULL << 15;
 
-	string bishop = "32 56";
+	string bishop = "32 56 -4 -4";
 	string king = "52 39";
 	string material = "-27 13 22 -34 33";
-	string outFile = "2 -6 -3 -5 6 -4 -6 -2 -4 -1 12 -16";
-	string outRank = "1 -7 -17 1 -17 -6 5 5 -9 11 16 -22";
+	string mobility = "8 5 7 7 3 5 3 2";
+	string outFile = "2 -6 -3 -5 6 -4 -6 -2 -4 -1 12 -15";
+	string outpost = "80 8 11 4";
+	string outRank = "1 -7 -17 1 -17 2 5 5 -10 11 16 -22";
 	string passed = "-5 8 -49 -4 4";
 	string pawn = "3 7 -24 -26 -8 -21 -10 -1";
-	string pawnProtection = "11 14 11 20 -6 18 -3 13 -5 17 -46 20";
+	string defense = "11 14 11 20 -6 18 -3 13 -5 17 -46 20";
 	string rook = "72 1 30 12";
-
+	string tempo = "16 8";
 };
 
-enum Tracing { NO_TRACE, TRACE };
+//enum Tracing { NO_TRACE, TRACE };
 
-enum Term { PASSED = 6,STRUCTURE, TERM_NB };
+enum Term { PASSED = 6, STRUCTURE, TERM_NB };
 
 int scores[TERM_NB][2];
 
@@ -81,9 +84,32 @@ enum PieceType
 	PT_NB
 };
 
+constexpr U64 FileABB = 0x0101010101010101ULL;
+constexpr U64 FileBBB = FileABB << 1;
+constexpr U64 FileCBB = FileABB << 2;
+constexpr U64 FileDBB = FileABB << 3;
+constexpr U64 FileEBB = FileABB << 4;
+constexpr U64 FileFBB = FileABB << 5;
+constexpr U64 FileGBB = FileABB << 6;
+constexpr U64 FileHBB = FileABB << 7;
+
+constexpr U64 Rank1BB = 0xFF;
+constexpr U64 Rank2BB = Rank1BB << (8 * 1);
+constexpr U64 Rank3BB = Rank1BB << (8 * 2);
+constexpr U64 Rank4BB = Rank1BB << (8 * 3);
+constexpr U64 Rank5BB = Rank1BB << (8 * 4);
+constexpr U64 Rank6BB = Rank1BB << (8 * 5);
+constexpr U64 Rank7BB = Rank1BB << (8 * 6);
+constexpr U64 Rank8BB = Rank1BB << (8 * 7);
+
+const U64 bbOutpostRanks = Rank4BB | Rank5BB | Rank6BB;
+
 enum File : int { FILE_A, FILE_B, FILE_C, FILE_D, FILE_E, FILE_F, FILE_G, FILE_H, FILE_NB };
 
 enum Rank : int { RANK_1, RANK_2, RANK_3, RANK_4, RANK_5, RANK_6, RANK_7, RANK_8, RANK_NB };
+
+const U64 bbLight = 0xaa55aa55aa55aa55ull;
+const U64 bbDark = 0x55aa55aa55aa55aaull;
 
 static S64 Now() {
 	return (clock() * 1000) / CLOCKS_PER_SEC;
@@ -135,6 +161,7 @@ const int phases[] = { 0, 1, 1, 2, 4, 0 };
 int materialValOrg[PT_NB] = { 100,320,330,500,900,0 };
 int max_material[PT_NB] = {};
 int material[PT_NB] = {};
+int mobility[PT_NB] = {};
 int pawnProtection[PT_NB] = {};
 int pawnConnected = 0;
 int pawnDoubled = 0;
@@ -146,6 +173,7 @@ int passedBlocked = 0;
 int passedKU = 0;
 int passedKE = 0;
 int bishopPair = 0;
+int bishopBad = 0;
 int rook_open = 0;
 int rook_semi_open = 0;
 int kingShield1 = 0;
@@ -154,6 +182,9 @@ int outsideFile[PT_NB] = {};
 int outsideRank[PT_NB] = {};
 int bonus[PT_NB][RANK_NB][FILE_NB] = {};
 int bonusMax[PT_NB][RANK_NB][FILE_NB] = {};
+int outpost[2][2] = {};
+int tempo = 0;
+int contempt = 0;
 SOptions options;
 Position pos;
 vector<U64> hash_history;
@@ -264,7 +295,14 @@ static int Max(int score) {
 	return max(Mg(score), Eg(score));
 }
 
-auto MoveToUci(const Move& move, const int flip) {
+static string SquareToUci(const int sq,const int flip) {
+	string str;
+	str += 'a' + (sq % 8);
+	str += '1' + (flip ? (7 - sq / 8) : (sq / 8));
+	return str;
+}
+
+static auto MoveToUci(const Move& move, const int flip) {
 	string str;
 	str += 'a' + (move.from % 8);
 	str += '1' + (flip ? (7 - move.from / 8) : (move.from / 8));
@@ -276,7 +314,7 @@ auto MoveToUci(const Move& move, const int flip) {
 	return str;
 }
 
-int PieceTypeOn(const Position& pos, const int sq) {
+static int PieceTypeOn(const Position& pos, const int sq) {
 	const U64 bb = 1ULL << sq;
 	for (int i = 0; i < 6; ++i) {
 		if (pos.pieces[i] & bb) {
@@ -286,7 +324,7 @@ int PieceTypeOn(const Position& pos, const int sq) {
 	return PT_NB;
 }
 
-void flip(Position& pos) {
+static void flip(Position& pos) {
 	pos.color[0] = flip(pos.color[0]);
 	pos.color[1] = flip(pos.color[1]);
 	for (int i = 0; i < 6; ++i) {
@@ -312,27 +350,27 @@ auto ray(const int sq, const U64 blockers, F f) {
 	return mask;
 }
 
-U64 knight(const int sq, const U64) {
+static U64 knight(const int sq, const U64) {
 	const U64 bb = 1ULL << sq;
 	return (((bb << 15) | (bb >> 17)) & 0x7F7F7F7F7F7F7F7FULL) | (((bb << 17) | (bb >> 15)) & 0xFEFEFEFEFEFEFEFEULL) |
 		(((bb << 10) | (bb >> 6)) & 0xFCFCFCFCFCFCFCFCULL) | (((bb << 6) | (bb >> 10)) & 0x3F3F3F3F3F3F3F3FULL);
 }
 
-auto bishop(const int sq, const U64 blockers) {
+static U64 bishop(const int sq, const U64 blockers) {
 	return ray(sq, blockers, nw) | ray(sq, blockers, ne) | ray(sq, blockers, sw) | ray(sq, blockers, se);
 }
 
-auto rook(const int sq, const U64 blockers) {
+static U64 rook(const int sq, const U64 blockers) {
 	return ray(sq, blockers, North) | ray(sq, blockers, east) | ray(sq, blockers, South) | ray(sq, blockers, west);
 }
 
-U64 king(const int sq, const U64) {
+static U64 king(const int sq, const U64) {
 	const U64 bb = 1ULL << sq;
 	return (bb << 8) | (bb >> 8) | (((bb >> 1) | (bb >> 9) | (bb << 7)) & 0x7F7F7F7F7F7F7F7FULL) |
 		(((bb << 1) | (bb << 9) | (bb >> 7)) & 0xFEFEFEFEFEFEFEFEULL);
 }
 
-[[nodiscard]] auto attacked(const Position& pos, const int sq, const int them = true) {
+static bool Attacked(const Position& pos, const int sq, const int them = true) {
 	const U64 bb = 1ULL << sq;
 	const U64 kt = pos.color[them] & pos.pieces[KNIGHT];
 	const U64 BQ = pos.pieces[BISHOP] | pos.pieces[QUEEN];
@@ -345,7 +383,7 @@ U64 king(const int sq, const U64) {
 		(king(sq, 0) & pos.color[them] & pos.pieces[KING]);
 }
 
-auto MakeMove(Position& pos, const Move& move) {
+static auto MakeMove(Position& pos, const Move& move) {
 	const int piece = PieceTypeOn(pos, move.from);
 	const int captured = PieceTypeOn(pos, move.to);
 	const U64 to = 1ULL << move.to;
@@ -396,7 +434,7 @@ auto MakeMove(Position& pos, const Move& move) {
 	flip(pos);
 
 	// Return move legality
-	return !attacked(pos, lsb(pos.color[1] & pos.pieces[KING]), false);
+	return !Attacked(pos, lsb(pos.color[1] & pos.pieces[KING]), false);
 }
 
 void add_move(Move* const movelist, int& num_moves, const int from, const int to, const int promo = PT_NB) {
@@ -456,17 +494,19 @@ static int MoveGen(const Position& pos, Move* const movelist, const bool only_ca
 	generate_piece_moves(movelist, num_moves, pos, ROOK, to_mask, rook);
 	generate_piece_moves(movelist, num_moves, pos, QUEEN, to_mask, rook);
 	generate_piece_moves(movelist, num_moves, pos, KING, to_mask, king);
-	if (!only_captures && pos.castling[0] && !(all & 0x60ULL) && !attacked(pos, 4) && !attacked(pos, 5)) {
+	if (!only_captures && pos.castling[0] && !(all & 0x60ULL) && !Attacked(pos, 4) && !Attacked(pos, 5)) {
 		add_move(movelist, num_moves, 4, 6);
 	}
-	if (!only_captures && pos.castling[1] && !(all & 0xEULL) && !attacked(pos, 4) && !attacked(pos, 3)) {
+	if (!only_captures && pos.castling[1] && !(all & 0xEULL) && !Attacked(pos, 4) && !Attacked(pos, 3)) {
 		add_move(movelist, num_moves, 4, 2);
 	}
 	return num_moves;
 }
 
 //Prints the bitboard
-static void PrintBitboard(U64 bb) {
+static void PrintBitboard(bool r, U64 bb) {
+	if (r)
+		bb = flip(bb);
 	const char* s = "   +---+---+---+---+---+---+---+---+\n";
 	const char* t = "     A   B   C   D   E   F   G   H\n";
 	cout << t;
@@ -484,6 +524,9 @@ static void PrintBitboard(U64 bb) {
 
 //Pretty-prints the position (including FEN and hash key)
 static void PrintBoard(Position& pos) {
+	bool r = pos.flipped;
+	if (r)
+		flip(pos);
 	const char* s = "   +---+---+---+---+---+---+---+---+\n";
 	const char* t = "     A   B   C   D   E   F   G   H\n";
 	cout << t;
@@ -501,78 +544,96 @@ static void PrintBoard(Position& pos) {
 	}
 	cout << s;
 	cout << t << endl;
+	if (r)
+		flip(pos);
 }
 
-template<Tracing T>
-static int Eval(Position& pos) {
-	// Include side to move bonus
-	int score = S(10, 10);
-	phase = 0;
-	//int flipped = pos.flipped;
-	for (int c = 0; c < 2; ++c) {
-		// our pawns, their pawns
-		const U64 pawns[] = { pos.color[0] & pos.pieces[PAWN], pos.color[1] & pos.pieces[PAWN] };
-		const U64 bbProtected = nw(pawns[0]) | ne(pawns[0]);
-		const U64 attacked_by_pawns = se(pawns[1]) | sw(pawns[1]);
-		//const int kings[] = { lsb(pos.colour[0] & pos.pieces[KING]), lsb(pos.colour[1] & pos.pieces[KING]) };
-		const auto my_k_pos = lsb(pos.color[0] & pos.pieces[KING]);
-		const auto their_k_pos = lsb(pos.color[1] & pos.pieces[KING]);
-		U64 bbConnected = bbProtected | South(bbProtected);
-		bbConnected |= South(bbConnected);
-		// Bishop pair
-		if (count(pos.color[0] & pos.pieces[BISHOP]) == 2) {
-			score += bishopPair;
-		}
+static int TotalScore(int c) {
+	int score = 0;
+	for (int n = 0; n < TERM_NB; n++)
+		score += scores[n][c];
+	return score;
+}
 
-		// For each piece type
-		for (int p = 0; p < 6; ++p) {
-			auto copy = pos.color[0] & pos.pieces[p];
+U64 Span(U64 bb) {
+	return bb | bb >> 8 | bb >> 16 | bb >> 24 | bb >> 32;
+}
+
+constexpr U64 Attacks(int pt, int sq, U64 blockers) {
+	switch (pt) {
+	case ROOK:
+		return rook(sq, blockers);
+	case BISHOP:
+		return bishop(sq, blockers);
+	case QUEEN:
+		return rook(sq, blockers) | bishop(sq, blockers);
+	case KNIGHT:
+		return knight(sq, blockers);
+	case KING:
+		return king(sq, blockers);
+	default:
+		return 0;
+	}
+}
+
+static int Eval(Position& pos) {
+	std::memset(scores, 0, sizeof(scores));
+	//int score = 0;
+	int score = tempo;
+	phase = 0;
+	U64 blockers = pos.color[0] | pos.color[1];
+	for (int c = 0; c < 2; ++c) {
+		const U64 pawns[] = { pos.color[0] & pos.pieces[PAWN], pos.color[1] & pos.pieces[PAWN] };
+		const U64 bbProtection = nw(pawns[0]) | ne(pawns[0]);
+		const U64 bbAttack = se(pawns[1]) | sw(pawns[1]);
+		const U64 bbSpan = Span(bbAttack);
+		//PrintBitboard(pos.flipped, bbAttack);
+		const U64 bbOutpost = ~bbSpan & bbOutpostRanks;
+		//PrintBitboard(pos.flipped, bbOutpost);
+		//const int kings[] = { lsb(pos.colour[0] & pos.pieces[KING]), lsb(pos.colour[1] & pos.pieces[KING]) };
+		const int sqKUs = lsb(pos.color[0] & pos.pieces[KING]);
+		const int sqKEn = lsb(pos.color[1] & pos.pieces[KING]);
+		U64 bbConnected = bbProtection | South(bbProtection);
+		bbConnected |= South(bbConnected);
+		for (int pt = 0; pt < 6; ++pt) {
+			auto copy = pos.color[0] & pos.pieces[pt];
 			while (copy) {
-				phase += phases[p];
+				phase += phases[pt];
 
 				const int sq = lsb(copy);
 				copy &= copy - 1;
 				const int rank = sq / 8;
 				const int file = sq % 8;
-				score += bonus[p][rank][file];
-				if (T)
-					scores[p][pos.flipped] += bonus[p][rank][file];
-				const U64 piece_bb = 1ULL << sq;
-				if (piece_bb & bbProtected) {
-					score += pawnProtection[p];
+				scores[pt][pos.flipped] += bonus[pt][rank][file];
+				const U64 bbPiece = 1ULL << sq;
+				if (bbPiece & bbProtection) {
+					scores[pt][pos.flipped] += pawnProtection[pt];
 				}
-				if (p == PAWN) {
+				if (pt == PAWN) {
 					// Passed pawns
 					U64 bbFile = 0x101010101010101ULL << file;
 					U64 bbForward = 0x101010101010100ULL << sq;
 					U64 blockers = bbForward | west(bbForward) | east(bbForward);
 					if (!(blockers & pawns[1])) {
-						int v = OutsideFile(file) * passedFile;
-						v += PassedRank(rank - 1) * passedRank;
-						if (North(piece_bb) & pos.color[1])
-							v += passedBlocked;
-						// King defense/attack
-						// king distance to square in front of passer
-						/*int i1 = abs(((int)my_k_pos / 8) - (rank + 1));
-						int i2 = abs(((int)my_k_pos % 8) - file);
-						v -= passedKU * max(i1, i2);
-						i1 = abs(((int)their_k_pos / 8) - (rank + 1));
-						i2 = abs(((int)their_k_pos % 8) - file);
-						v += passedKE * max(i1, i2);*/
+						int passed = OutsideFile(file) * passedFile;
+						passed += PassedRank(rank - 1) * passedRank;
+						if (North(bbPiece) & pos.color[1])
+							passed += passedBlocked;
 						int sq2 = sq + 8;
-						v += Distance(sq2, my_k_pos) * passedKU;
-						v += Distance(sq2, their_k_pos) * passedKE;
-						score += S(v >> 1, v);
-						if (T)
-							scores[PASSED][pos.flipped] = S(v >> 1, v);
+						passed += Distance(sq2, sqKUs) * passedKU;
+						passed += Distance(sq2, sqKEn) * passedKE;
+						scores[PASSED][pos.flipped] += S(passed >> 1, passed);
 					}
 					int structure = 0;
-					// Doubled pawns
+					
 					if (bbForward & pawns[0]) {
 						structure += pawnDoubled;
 					}
-					if (bbConnected & pawns[0]) {
+					if (bbConnected & bbPiece) {
 						structure += pawnConnected;
+						//cout << "Connected " <<SquareToUci(sq,pos.flipped) << endl;
+						//PrintBitboard(pos.flipped, bbConnected);
+						//PrintBitboard(pos.flipped, pawns[0]);
 					}
 					else {
 						U64 bbAdjacent = east(bbFile) | west(bbFile);
@@ -580,45 +641,65 @@ static int Eval(Position& pos) {
 							structure += pawnIsolated;
 						}
 						else {
-							bbAdjacent &= North(bbProtected);
+							bbAdjacent &= North(bbProtection);
 							if (bbAdjacent & pawns[0] && bbAdjacent & pawns[1])
 								structure += pawnBehind;
 						}
 					}
-					score += structure;
-					if (T)
-						scores[STRUCTURE][pos.flipped] = structure;
+					scores[STRUCTURE][pos.flipped] += structure;
 				}
-				else if (p == ROOK) {
-					// Rook on open or semi-open files
-					const U64 file_bb = 0x101010101010101ULL << file;
-					if (!(file_bb & pawns[0])) {
-						if (!(file_bb & pawns[1])) {
-							score += rook_open;
-						}
-						else {
-							score += rook_semi_open;
-						}
+				else if (pt == KING) {
+					if ((file < 3 || file>4)) {
+						U64 bbShield1 = North(bbPiece);
+						bbShield1 |= east(bbShield1) | west(bbShield1);
+						U64 bbShield2 = North(bbShield1);
+						//PrintBitboard(pos.flipped,bbShield2);
+						int v1 = kingShield1 * count(bbShield1 & pawns[0]);
+						int v2 = kingShield2 * count(bbShield2 & pawns[0]);
+						scores[pt][pos.flipped] += S(v1 + v2, 0);
 					}
 				}
-				else if (p == KING && (rank < 3 || rank>4)) {
-					U64 bbShield1 = North(sq);
-					bbShield1 |= east(bbShield1) | west(bbShield1);
-					U64 bbShield2 = North(bbShield1);
-					int v1 = kingShield1 * count(bbShield1 & pawns[0]);
-					int v2 = kingShield2 * count(bbShield2 & pawns[0]);
-					score += S(v1 + v2, 0);
+				else {
+					scores[pt][pos.flipped] += mobility[pt] * count(Attacks(pt,sq,blockers) & ~bbAttack);
+					if (pt == ROOK) {
+						// Rook on open or semi-open files
+						const U64 file_bb = 0x101010101010101ULL << file;
+						if (!(file_bb & pawns[0])) {
+							if (!(file_bb & pawns[1])) {
+								scores[pt][pos.flipped] += rook_open;
+							}
+							else {
+								scores[pt][pos.flipped] += rook_semi_open;
+							}
+						}
+					}
+					else if ((pt == KNIGHT) || (pt == BISHOP)) {
+						if (bbOutpost & bbPiece)
+							scores[pt][pos.flipped] += outpost[pt == BISHOP][bbProtection && bbPiece] * 2;
+						else {
+							U64 bbMoves = (pt == KNIGHT) ? knight(sq, pos.color[0]) : bishop(sq, pos.color[0] | pos.color[1]);
+							if (bbOutpost & bbMoves)
+								scores[pt][pos.flipped] += outpost[pt == BISHOP][bbProtection && bbPiece];
+						}
+					}
 				}
 			}
 		}
 
-		// Bad bishops
-		score -= S(4, 4)
-			* ((!!(pos.color[0] & pos.pieces[BISHOP] & 0xAA55AA55AA55AA55ULL)
-				* count(pawns[0] & 0xAA55AA55AA55AA55ULL))
-				+ (!!(pos.color[0] & pos.pieces[BISHOP] & ~0xAA55AA55AA55AA55ULL)
-					* count(pawns[0] & ~0xAA55AA55AA55AA55ULL)));
 
+		U64 bbPieces = pos.pieces[BISHOP] & pos.color[0];
+		if (bbPieces) {
+			bool bw = bbPieces & bbLight;
+			bool bb = bbPieces & bbDark;
+			if (bw && bb)
+				scores[BISHOP][pos.flipped] += bishopPair;
+			else if (bw)
+				scores[BISHOP][pos.flipped] += bishopBad * count(bbLight & pawns[0]);
+			else
+				scores[BISHOP][pos.flipped] += bishopBad * count(bbDark & pawns[0]);
+		}
+
+		score += TotalScore(pos.flipped);
 		flip(pos);
 		score = -score;
 	}
@@ -664,14 +745,14 @@ static int alphabeta(Position& pos,
 	int64_t(&hh_table)[2][64][64],
 	vector<U64>& hash_history,
 	const int do_null = true) {
-	const int static_eval = Eval<NO_TRACE>(pos);
+	const int static_eval = Eval(pos);
 	// Don't overflow the stack
 	if (ply > 127) {
 		return static_eval;
 	}
 	stack[ply].score = static_eval;
 	// Check extensions
-	const auto in_check = attacked(pos, lsb(pos.color[0] & pos.pieces[KING]));
+	const auto in_check = Attacked(pos, lsb(pos.color[0] & pos.pieces[KING]));
 	depth = in_check ? max(1, depth + 1) : depth;
 	const int improving = ply > 1 && static_eval > stack[ply - 2].score;
 	const int in_qsearch = depth <= 0;
@@ -767,9 +848,7 @@ static int alphabeta(Position& pos,
 	}
 
 	// Exit early if out of time
-	if (stop || (ply > 0 && Now() >= stop_time)) {
-		return 0;
-	}
+	if (stop || (ply > 0 && Now() >= stop_time)) { return 0; }
 
 	auto& moves = stack[ply].moves;
 	const int num_moves = MoveGen(pos, moves, in_qsearch);
@@ -889,10 +968,7 @@ static int alphabeta(Position& pos,
 		}
 
 		// Exit early if out of time
-		if (stop || Now() >= stop_time) {
-			hash_history.pop_back();
-			return 0;
-		}
+		//if (stop || Now() >= stop_time) {hash_history.pop_back();return 0;}
 
 		if (score > best_score) {
 			best_score = score;
@@ -1183,6 +1259,14 @@ static void InitEval() {
 		material[pt] = S(mg, eg);
 		max_material[pt] = max(mg, eg);
 	}
+
+	SplitInt(options.mobility, split, ' ');
+	for (int pt = KNIGHT; pt < KING; pt++) {
+		mg = GetVal(split, (pt - 1) * 2);
+		eg = GetVal(split, (pt - 1) * 2 + 1);
+		mobility[pt] = S(mg, eg);
+	}
+
 	SplitInt(options.outFile, split, ' ');
 	for (int pt = PAWN; pt < PT_NB; pt++) {
 		mg = GetVal(split, pt * 2);
@@ -1195,7 +1279,7 @@ static void InitEval() {
 		eg = GetVal(split, pt * 2 + 1);
 		outsideRank[pt] = S(mg, eg);
 	}
-	SplitInt(options.pawnProtection, split, ' ');
+	SplitInt(options.defense, split, ' ');
 	for (int pt = PAWN; pt < PT_NB; pt++) {
 		mg = GetVal(split, pt * 2);
 		eg = GetVal(split, pt * 2 + 1);
@@ -1206,6 +1290,9 @@ static void InitEval() {
 	mg = GetVal(split, 0);
 	eg = GetVal(split, 1);
 	bishopPair = S(mg, eg);
+	mg = GetVal(split, 2);
+	eg = GetVal(split, 3);
+	bishopBad = S(mg, eg);
 
 	SplitInt(options.pawn, split, ' ');
 	mg = GetVal(split, 0);
@@ -1239,6 +1326,20 @@ static void InitEval() {
 	passedBlocked = GetVal(split, 2);
 	passedKU = GetVal(split, 3);
 	passedKE = GetVal(split, 4);
+
+	SplitInt(options.outpost, split, ' ');
+	for (int s = 0; s < 2; s++) {
+		mg = GetVal(split, s * 2);
+		eg = GetVal(split, s * 2 + 1);
+		int score = S(mg, eg);
+		outpost[0][s] = score * 2;
+		outpost[1][s] = score;
+	}
+
+	SplitInt(options.tempo, split, ' ');
+	mg = GetVal(split, 0);
+	eg = GetVal(split, 1);
+	tempo = S(mg, eg);
 
 	for (int pt = PAWN; pt < PT_NB; ++pt)
 		for (int r = RANK_1; r < RANK_NB; ++r)
@@ -1322,12 +1423,6 @@ static string ShowScore(int s) {
 	return ShowScore(to_string(v) + " (" + to_string(Mg(s)) + " " + to_string((int)Eg(s)) + ")");
 }
 
-/*static void ShowScore(string name, int sw, int sb) {
-	int v = ScoreToValue(sw - sb);
-	int t = sw - sb;
-	cout << name << " W(" << Mg(sw) << " " << Eg(sw) << ") B(" << Mg(sb) << " " << Eg(sb) << ") T(" << Mg(t) << " " << Eg(t) << ")" << endl;
-}*/
-
 static void PrintTerm(string name, int idx) {
 	int sw = scores[idx][0];
 	int sb = scores[idx][1];
@@ -1349,10 +1444,10 @@ static void UciBench() {
 }
 
 static void UciEval() {
-	SetFen(pos, "8/4R3/8/8/1k3p2/3q4/4R2K/8 w - - 0 1");
+	SetFen(pos,tstFen);
 	PrintBoard(pos);
-	std::memset(scores, 0, sizeof(scores));
-	int score = Eval<TRACE>(pos);
+	cout << "color " << (pos.flipped ? "black" : "white") << endl;
+	int score = Eval(pos);
 	PrintTerm("Pawn", PAWN);
 	PrintTerm("Knight", KNIGHT);
 	PrintTerm("Bishop", BISHOP);
@@ -1386,10 +1481,11 @@ static void UciCommand(string str) {
 		cout << "option name hash type spin default " << (options.hash >> 15) << " min 1 max 65536" << endl;
 		cout << "option name bishop type string default " << options.bishop << endl;
 		cout << "option name material type string default " << options.material << endl;
+		cout << "option name mobility type string default " << options.mobility << endl;
 		cout << "option name outFile type string default " << options.outFile << endl;
 		cout << "option name outRank type string default " << options.outRank << endl;
 		cout << "option name pawn type string default " << options.pawn << endl;
-		cout << "option name pawnProtection type string default " << options.pawnProtection << endl;
+		cout << "option name pawnProtection type string default " << options.defense << endl;
 		cout << "option name rook type string default " << options.rook << endl;
 		cout << "uciok" << endl;
 	}
@@ -1419,14 +1515,18 @@ static void UciCommand(string str) {
 				options.king = value;
 			else if (name == "material")
 				options.material = value;
+			else if (name == "mobility")
+				options.mobility = value;
 			else if (name == "outFile")
 				options.outFile = value;
 			else if (name == "outRank")
 				options.outRank = value;
+			else if (name == "outpost")
+				options.outpost = value;
 			else if (name == "pawn")
 				options.pawn = value;
 			else if (name == "pawnProtection")
-				options.pawnProtection = value;
+				options.defense = value;
 			else if (name == "rook")
 				options.rook = value;
 		}
@@ -1455,7 +1555,7 @@ static void UciCommand(string str) {
 		}
 		pFen = trim(pFen);
 		if (!pFen.empty())
-			SetFen(pos, pFen == "" ? DEFAULT_FEN : pFen);
+			SetFen(pos, pFen == "" ? defFen : pFen);
 		Move moves[256];
 		for (string uci : pMoves) {
 			const int num_moves = MoveGen(pos, moves, false);
