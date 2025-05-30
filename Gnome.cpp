@@ -1441,7 +1441,7 @@ static void UciBench() {
 static void UciEval() {
 	SetFen(pos, "1k6/1pp1R1p1/4PN2/4b1P1/5p2/3q1n2/1P2R1PK/8 b - - 0 1");
 	PrintBoard(pos);
-	cout << "color " << (pos.flipped ? "black" : "white") << endl;
+	cout << "side " << (pos.flipped ? "black" : "white") << endl;
 	int score = Eval(pos);
 	PrintTerm("Pawn", PAWN);
 	PrintTerm("Knight", KNIGHT);
