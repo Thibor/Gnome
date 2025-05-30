@@ -17,6 +17,7 @@
 #include <chrono>
 
 #define MATE_SCORE (1 << 15)
+#define MAX_DEPTH 128
 #define INF (1 << 16)
 #define S64 signed __int64
 #define U64 unsigned __int64
@@ -53,21 +54,21 @@ struct SOptions {
 	int threads = 1;
 	U64 hash = 64ULL << 15;
 
-	string bishop = "32 56 -4 -4";
+	string bishop = "32 55 -36 -4";
+	string defense = "11 14 11 20 -6 18 -3 13 -62 13 -46 20";
 	string king = "52 39";
 	string material = "-27 13 22 -34 33";
-	string mobility = "8 5 7 7 3 5 3 2";
-	string outFile = "2 -6 -3 -5 6 -4 -6 -2 -4 -1 12 -15";
+	string mobility = "8 5 3 7 3 5 3 2";
+	string outFile = "2 -6 -3 -5 -58 -4 -6 -8 -4 -1 12 -15";
 	string outpost = "80 8 11 4";
-	string outRank = "1 -7 -17 1 -17 2 5 5 -10 11 16 -22";
+	string outRank = "1 57 -17 5 -17 2 3 5 -10 11 16 -22";
 	string passed = "-5 8 -49 -4 4";
-	string pawn = "3 7 -24 -26 -8 -21 -10 -1";
-	string defense = "11 14 11 20 -6 18 -3 13 -5 17 -46 20";
+	string pawn = "3 7 -28 -26 -8 -21 -10 3";
 	string rook = "72 1 30 12";
 	string tempo = "16 8";
-};
 
-//enum Tracing { NO_TRACE, TRACE };
+
+};
 
 enum Term { PASSED = 6, STRUCTURE, TERM_NB };
 
@@ -211,52 +212,52 @@ auto thread_count = 1;
 
 vector<TT_Entry> transposition_table;
 
-U64 flip(const U64 bb) {
+static U64 flip(const U64 bb) {
 	//return __builtin_bswap64(bb);
 	return _byteswap_uint64(bb);
 }
 
-auto lsb(const U64 bb) {
+static U64 lsb(const U64 bb) {
 	//return __builtin_ctzll(bb);
 	return _tzcnt_u64(bb);
 }
 
-auto count(const U64 bb) {
+static U64 count(const U64 bb) {
 	//return __builtin_popcountll(bb);
 	return _mm_popcnt_u64(bb);
 	//return popcount(bb);
 }
 
-U64 east(const U64 bb) {
+static U64 East(const U64 bb) {
 	return (bb << 1) & ~0x0101010101010101ULL;
 }
 
-U64 west(const U64 bb) {
+static U64 West(const U64 bb) {
 	return (bb >> 1) & ~0x8080808080808080ULL;
 }
 
-U64 North(const U64 bb) {
+static U64 North(const U64 bb) {
 	return bb << 8;
 }
 
-U64 South(const U64 bb) {
+static U64 South(const U64 bb) {
 	return bb >> 8;
 }
 
-U64 nw(const U64 bb) {
-	return North(west(bb));
+static U64 nw(const U64 bb) {
+	return North(West(bb));
 }
 
-U64 ne(const U64 bb) {
-	return North(east(bb));
+static U64 ne(const U64 bb) {
+	return North(East(bb));
 }
 
-U64 sw(const U64 bb) {
-	return South(west(bb));
+static U64 sw(const U64 bb) {
+	return South(West(bb));
 }
 
-U64 se(const U64 bb) {
-	return South(east(bb));
+static U64 se(const U64 bb) {
+	return South(East(bb));
 }
 
 auto operator==(const Move& lhs, const Move& rhs) {
@@ -295,7 +296,7 @@ static int Max(int score) {
 	return max(Mg(score), Eg(score));
 }
 
-static string SquareToUci(const int sq,const int flip) {
+static string SquareToUci(const int sq, const int flip) {
 	string str;
 	str += 'a' + (sq % 8);
 	str += '1' + (flip ? (7 - sq / 8) : (sq / 8));
@@ -338,7 +339,7 @@ static void flip(Position& pos) {
 }
 
 template <typename F>
-auto ray(const int sq, const U64 blockers, F f) {
+U64 Ray(const int sq, const U64 blockers, F f) {
 	U64 mask = f(1ULL << sq);
 	mask |= f(mask & ~blockers);
 	mask |= f(mask & ~blockers);
@@ -350,21 +351,21 @@ auto ray(const int sq, const U64 blockers, F f) {
 	return mask;
 }
 
-static U64 knight(const int sq, const U64) {
+static U64 KnightAttack(const int sq, const U64) {
 	const U64 bb = 1ULL << sq;
 	return (((bb << 15) | (bb >> 17)) & 0x7F7F7F7F7F7F7F7FULL) | (((bb << 17) | (bb >> 15)) & 0xFEFEFEFEFEFEFEFEULL) |
 		(((bb << 10) | (bb >> 6)) & 0xFCFCFCFCFCFCFCFCULL) | (((bb << 6) | (bb >> 10)) & 0x3F3F3F3F3F3F3F3FULL);
 }
 
-static U64 bishop(const int sq, const U64 blockers) {
-	return ray(sq, blockers, nw) | ray(sq, blockers, ne) | ray(sq, blockers, sw) | ray(sq, blockers, se);
+static U64 BishopAttack(const int sq, const U64 blockers) {
+	return Ray(sq, blockers, nw) | Ray(sq, blockers, ne) | Ray(sq, blockers, sw) | Ray(sq, blockers, se);
 }
 
-static U64 rook(const int sq, const U64 blockers) {
-	return ray(sq, blockers, North) | ray(sq, blockers, east) | ray(sq, blockers, South) | ray(sq, blockers, west);
+static U64 RookAttack(const int sq, const U64 blockers) {
+	return Ray(sq, blockers, North) | Ray(sq, blockers, East) | Ray(sq, blockers, South) | Ray(sq, blockers, West);
 }
 
-static U64 king(const int sq, const U64) {
+static U64 KingAttack(const int sq, const U64) {
 	const U64 bb = 1ULL << sq;
 	return (bb << 8) | (bb >> 8) | (((bb >> 1) | (bb >> 9) | (bb << 7)) & 0x7F7F7F7F7F7F7F7FULL) |
 		(((bb << 1) | (bb << 9) | (bb >> 7)) & 0xFEFEFEFEFEFEFEFEULL);
@@ -377,10 +378,10 @@ static bool Attacked(const Position& pos, const int sq, const int them = true) {
 	const U64 RQ = pos.pieces[ROOK] | pos.pieces[QUEEN];
 	const U64 pawns = pos.color[them] & pos.pieces[PAWN];
 	const U64 pawn_attacks = them ? sw(pawns) | se(pawns) : nw(pawns) | ne(pawns);
-	return (pawn_attacks & bb) | (kt & knight(sq, 0)) |
-		(bishop(sq, pos.color[0] | pos.color[1]) & pos.color[them] & BQ) |
-		(rook(sq, pos.color[0] | pos.color[1]) & pos.color[them] & RQ) |
-		(king(sq, 0) & pos.color[them] & pos.pieces[KING]);
+	return (pawn_attacks & bb) | (kt & KnightAttack(sq, 0)) |
+		(BishopAttack(sq, pos.color[0] | pos.color[1]) & pos.color[them] & BQ) |
+		(RookAttack(sq, pos.color[0] | pos.color[1]) & pos.color[them] & RQ) |
+		(KingAttack(sq, 0) & pos.color[them] & pos.pieces[KING]);
 }
 
 static auto MakeMove(Position& pos, const Move& move) {
@@ -488,12 +489,12 @@ static int MoveGen(const Position& pos, Move* const movelist, const bool only_ca
 	}
 	generate_pawn_moves(movelist, num_moves, nw(pawns) & (pos.color[1] | pos.ep), -7);
 	generate_pawn_moves(movelist, num_moves, ne(pawns) & (pos.color[1] | pos.ep), -9);
-	generate_piece_moves(movelist, num_moves, pos, KNIGHT, to_mask, knight);
-	generate_piece_moves(movelist, num_moves, pos, BISHOP, to_mask, bishop);
-	generate_piece_moves(movelist, num_moves, pos, QUEEN, to_mask, bishop);
-	generate_piece_moves(movelist, num_moves, pos, ROOK, to_mask, rook);
-	generate_piece_moves(movelist, num_moves, pos, QUEEN, to_mask, rook);
-	generate_piece_moves(movelist, num_moves, pos, KING, to_mask, king);
+	generate_piece_moves(movelist, num_moves, pos, KNIGHT, to_mask, KnightAttack);
+	generate_piece_moves(movelist, num_moves, pos, BISHOP, to_mask, BishopAttack);
+	generate_piece_moves(movelist, num_moves, pos, QUEEN, to_mask, BishopAttack);
+	generate_piece_moves(movelist, num_moves, pos, ROOK, to_mask, RookAttack);
+	generate_piece_moves(movelist, num_moves, pos, QUEEN, to_mask, RookAttack);
+	generate_piece_moves(movelist, num_moves, pos, KING, to_mask, KingAttack);
 	if (!only_captures && pos.castling[0] && !(all & 0x60ULL) && !Attacked(pos, 4) && !Attacked(pos, 5)) {
 		add_move(movelist, num_moves, 4, 6);
 	}
@@ -562,15 +563,15 @@ U64 Span(U64 bb) {
 constexpr U64 Attacks(int pt, int sq, U64 blockers) {
 	switch (pt) {
 	case ROOK:
-		return rook(sq, blockers);
+		return RookAttack(sq, blockers);
 	case BISHOP:
-		return bishop(sq, blockers);
+		return BishopAttack(sq, blockers);
 	case QUEEN:
-		return rook(sq, blockers) | bishop(sq, blockers);
+		return RookAttack(sq, blockers) | BishopAttack(sq, blockers);
 	case KNIGHT:
-		return knight(sq, blockers);
+		return KnightAttack(sq, blockers);
 	case KING:
-		return king(sq, blockers);
+		return KingAttack(sq, blockers);
 	default:
 		return 0;
 	}
@@ -578,22 +579,18 @@ constexpr U64 Attacks(int pt, int sq, U64 blockers) {
 
 static int Eval(Position& pos) {
 	std::memset(scores, 0, sizeof(scores));
-	//int score = 0;
 	int score = tempo;
 	phase = 0;
 	U64 blockers = pos.color[0] | pos.color[1];
 	for (int c = 0; c < 2; ++c) {
 		const U64 pawns[] = { pos.color[0] & pos.pieces[PAWN], pos.color[1] & pos.pieces[PAWN] };
-		const U64 bbProtection = nw(pawns[0]) | ne(pawns[0]);
+		const U64 bbDefense = nw(pawns[0]) | ne(pawns[0]);
 		const U64 bbAttack = se(pawns[1]) | sw(pawns[1]);
 		const U64 bbSpan = Span(bbAttack);
-		//PrintBitboard(pos.flipped, bbAttack);
 		const U64 bbOutpost = ~bbSpan & bbOutpostRanks;
-		//PrintBitboard(pos.flipped, bbOutpost);
-		//const int kings[] = { lsb(pos.colour[0] & pos.pieces[KING]), lsb(pos.colour[1] & pos.pieces[KING]) };
 		const int sqKUs = lsb(pos.color[0] & pos.pieces[KING]);
 		const int sqKEn = lsb(pos.color[1] & pos.pieces[KING]);
-		U64 bbConnected = bbProtection | South(bbProtection);
+		U64 bbConnected = bbDefense | South(bbDefense);
 		bbConnected |= South(bbConnected);
 		for (int pt = 0; pt < 6; ++pt) {
 			auto copy = pos.color[0] & pos.pieces[pt];
@@ -606,14 +603,14 @@ static int Eval(Position& pos) {
 				const int file = sq % 8;
 				scores[pt][pos.flipped] += bonus[pt][rank][file];
 				const U64 bbPiece = 1ULL << sq;
-				if (bbPiece & bbProtection) {
+				if (bbPiece & bbDefense) {
 					scores[pt][pos.flipped] += pawnProtection[pt];
 				}
 				if (pt == PAWN) {
 					// Passed pawns
 					U64 bbFile = 0x101010101010101ULL << file;
 					U64 bbForward = 0x101010101010100ULL << sq;
-					U64 blockers = bbForward | west(bbForward) | east(bbForward);
+					U64 blockers = bbForward | West(bbForward) | East(bbForward);
 					if (!(blockers & pawns[1])) {
 						int passed = OutsideFile(file) * passedFile;
 						passed += PassedRank(rank - 1) * passedRank;
@@ -625,23 +622,20 @@ static int Eval(Position& pos) {
 						scores[PASSED][pos.flipped] += S(passed >> 1, passed);
 					}
 					int structure = 0;
-					
+
 					if (bbForward & pawns[0]) {
 						structure += pawnDoubled;
 					}
 					if (bbConnected & bbPiece) {
 						structure += pawnConnected;
-						//cout << "Connected " <<SquareToUci(sq,pos.flipped) << endl;
-						//PrintBitboard(pos.flipped, bbConnected);
-						//PrintBitboard(pos.flipped, pawns[0]);
 					}
 					else {
-						U64 bbAdjacent = east(bbFile) | west(bbFile);
+						U64 bbAdjacent = East(bbFile) | West(bbFile);
 						if (!(bbAdjacent & pawns[0])) {
 							structure += pawnIsolated;
 						}
 						else {
-							bbAdjacent &= North(bbProtection);
+							bbAdjacent &= North(bbDefense);
 							if (bbAdjacent & pawns[0] && bbAdjacent & pawns[1])
 								structure += pawnBehind;
 						}
@@ -651,7 +645,7 @@ static int Eval(Position& pos) {
 				else if (pt == KING) {
 					if ((file < 3 || file>4)) {
 						U64 bbShield1 = North(bbPiece);
-						bbShield1 |= east(bbShield1) | west(bbShield1);
+						bbShield1 |= East(bbShield1) | West(bbShield1);
 						U64 bbShield2 = North(bbShield1);
 						//PrintBitboard(pos.flipped,bbShield2);
 						int v1 = kingShield1 * count(bbShield1 & pawns[0]);
@@ -660,7 +654,7 @@ static int Eval(Position& pos) {
 					}
 				}
 				else {
-					scores[pt][pos.flipped] += mobility[pt] * count(Attacks(pt,sq,blockers) & ~bbAttack);
+					scores[pt][pos.flipped] += mobility[pt] * count(Attacks(pt, sq, blockers) & ~bbAttack);
 					if (pt == ROOK) {
 						// Rook on open or semi-open files
 						const U64 file_bb = 0x101010101010101ULL << file;
@@ -675,11 +669,12 @@ static int Eval(Position& pos) {
 					}
 					else if ((pt == KNIGHT) || (pt == BISHOP)) {
 						if (bbOutpost & bbPiece)
-							scores[pt][pos.flipped] += outpost[pt == BISHOP][bbProtection && bbPiece] * 2;
+							scores[pt][pos.flipped] += outpost[pt == BISHOP][bbDefense && bbPiece] * 2;
 						else {
-							U64 bbMoves = (pt == KNIGHT) ? knight(sq, pos.color[0]) : bishop(sq, pos.color[0] | pos.color[1]);
-							if (bbOutpost & bbMoves)
-								scores[pt][pos.flipped] += outpost[pt == BISHOP][bbProtection && bbPiece];
+							U64 bbMoves = (pt == KNIGHT) ? KnightAttack(sq, pos.color[0]) : BishopAttack(sq, pos.color[0] | pos.color[1]);
+							U64 bb = bbMoves & bbOutpost & ~pos.color[0];
+							if (bb)
+								scores[pt][pos.flipped] += outpost[pt == BISHOP][bbDefense && bb];
 						}
 					}
 				}
@@ -703,9 +698,6 @@ static int Eval(Position& pos) {
 		flip(pos);
 		score = -score;
 	}
-
-	//PrintBitboard(0xC3D7);
-	// Tapered eval
 	return (Mg(score) * phase + Eg(score) * (24 - phase)) / 24;
 }
 
@@ -731,7 +723,7 @@ static auto GetHash(const Position& pos) {
 	return hash;
 }
 
-static int alphabeta(Position& pos,
+static int SearchAlpha(Position& pos,
 	int alpha,
 	const int beta,
 	int depth,
@@ -787,7 +779,7 @@ static int alphabeta(Position& pos,
 				auto npos = pos;
 				flip(npos);
 				npos.ep = 0;
-				if (-alphabeta(npos,
+				if (-SearchAlpha(npos,
 					-beta,
 					-beta + 1,
 					depth - 4 - depth / 6,
@@ -807,7 +799,7 @@ static int alphabeta(Position& pos,
 
 			// Razoring
 			if (depth == 1 && static_eval + 200 < alpha) {
-				return alphabeta(pos,
+				return SearchAlpha(pos,
 					alpha,
 					beta,
 					0,
@@ -917,7 +909,7 @@ static int alphabeta(Position& pos,
 		int score;
 		if (in_qsearch || !moves_evaluated) {
 		full_window:
-			score = -alphabeta(npos,
+			score = -SearchAlpha(npos,
 				-beta,
 				-alpha,
 				depth - 1,
@@ -939,7 +931,7 @@ static int alphabeta(Position& pos,
 				: 0);
 
 		zero_window:
-			score = -alphabeta(npos,
+			score = -SearchAlpha(npos,
 				-alpha - 1,
 				-alpha,
 				depth - reduction - 1,
@@ -1080,11 +1072,11 @@ auto SearchIteratively(Position& pos,
 	// minify disable filter delete
 
 	int score = 0;
-	for (int i = 1; i < 128; ++i) {
+	for (int i = 1; i < MAX_DEPTH; ++i) {
 		auto window = 40;
 		auto research = 0;
 	research:
-		const auto newscore = alphabeta(pos,
+		const auto newscore = SearchAlpha(pos,
 			score - window,
 			score + window,
 			i,
@@ -1109,7 +1101,10 @@ auto SearchIteratively(Position& pos,
 
 			cout << "info";
 			cout << " depth " << i;
-			cout << " score cp " << newscore;
+			if (abs(newscore) < MATE_SCORE - MAX_DEPTH)
+				cout << " score cp " << newscore;
+			else
+				cout << " score mate " << (newscore > 0 ? (MATE_SCORE - newscore + 1)>>1 : -(MATE_SCORE + newscore)>>1);
 			if (newscore >= score + window) {
 				cout << " lowerbound";
 			}
@@ -1444,7 +1439,7 @@ static void UciBench() {
 }
 
 static void UciEval() {
-	SetFen(pos,tstFen);
+	SetFen(pos, "1k6/1pp1R1p1/4PN2/4b1P1/5p2/3q1n2/1P2R1PK/8 b - - 0 1");
 	PrintBoard(pos);
 	cout << "color " << (pos.flipped ? "black" : "white") << endl;
 	int score = Eval(pos);
@@ -1458,7 +1453,6 @@ static void UciEval() {
 	PrintTerm("Structure", STRUCTURE);
 	cout << "phase " << phase << endl;
 	cout << "score " << score << endl;
-
 }
 
 static void UciQuit() {
@@ -1485,7 +1479,7 @@ static void UciCommand(string str) {
 		cout << "option name outFile type string default " << options.outFile << endl;
 		cout << "option name outRank type string default " << options.outRank << endl;
 		cout << "option name pawn type string default " << options.pawn << endl;
-		cout << "option name pawnProtection type string default " << options.defense << endl;
+		cout << "option name defense type string default " << options.defense << endl;
 		cout << "option name rook type string default " << options.rook << endl;
 		cout << "uciok" << endl;
 	}
@@ -1525,7 +1519,7 @@ static void UciCommand(string str) {
 				options.outpost = value;
 			else if (name == "pawn")
 				options.pawn = value;
-			else if (name == "pawnProtection")
+			else if (name == "defense")
 				options.defense = value;
 			else if (name == "rook")
 				options.rook = value;
