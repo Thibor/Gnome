@@ -4,9 +4,9 @@
 
 /.gitignore
 /.vs
+/Gnome
 /x64/Debug
 /obj
-/RapChessCs.csproj.user
 *.config
 *.pdb
 *.manifest
