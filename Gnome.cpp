@@ -2,7 +2,6 @@
 //#include <bit>
 #include <iostream>
 #include <random>
-#include <thread>
 #include <array>
 #include <string>
 #include <cstring>
@@ -19,32 +18,22 @@
 #define MATE_SCORE (1 << 15)
 #define MAX_DEPTH 128
 #define INF (1 << 16)
+#define U16 unsigned __int16
+#define S32 signed __int32
 #define S64 signed __int64
 #define U64 unsigned __int64
-#define U16 unsigned __int16
 
+#define NAME "Gnome"
+#define VERSION "2025-10-13"
+
+S64 start_time = 0;
 using namespace std;
 
-#define MONTH (\
-  __DATE__ [2] == 'n' ? (__DATE__ [1] == 'a' ? "01" : "06") \
-: __DATE__ [2] == 'b' ? "02" \
-: __DATE__ [2] == 'r' ? (__DATE__ [0] == 'M' ? "03" : "04") \
-: __DATE__ [2] == 'y' ? "05" \
-: __DATE__ [2] == 'l' ? "07" \
-: __DATE__ [2] == 'g' ? "08" \
-: __DATE__ [2] == 'p' ? "09" \
-: __DATE__ [2] == 't' ? "10" \
-: __DATE__ [2] == 'v' ? "11" \
-: "12")
-#define DAY (std::string(1,(__DATE__[4] == ' ' ?  '0' : (__DATE__[4]))) + (__DATE__[5]))
-#define YEAR ((__DATE__[7]-'0') * 1000 + (__DATE__[8]-'0') * 100 + (__DATE__[9]-'0') * 10 + (__DATE__[10]-'0') * 1)
-
-string name = "Gnome";
 string defFen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq -";
 string tstFen = "1k6/1pp1R1p1/4P3/4b1P1/5p2/3q4/1P2R1PK/8 b - - 0 1";
 
 static void PrintWelcome() {
-	cout << name << " " << YEAR << "-" << MONTH << "-" << DAY << endl;
+	cout << NAME << " " << VERSION << endl;
 }
 
 struct SOptions {
@@ -59,7 +48,7 @@ struct SOptions {
 	string king = "52 39";
 	string material = "-27 13 22 -34 33";
 	string mobility = "8 5 3 7 3 5 3 2";
-	string outFile = "2 -6 -3 -5 -58 -4 -6 -8 -4 -1 12 -15";
+	string outFile = "2 -6 -7 -5 -58 -4 -6 -8 -4 -1 12 -15";
 	string outpost = "80 8 11 4";
 	string outRank = "1 57 -17 5 -17 2 3 5 -10 11 16 -22";
 	string passed = "-5 8 -49 -4 4";
@@ -367,7 +356,8 @@ static U64 RookAttack(const int sq, const U64 blockers) {
 
 static U64 KingAttack(const int sq, const U64) {
 	const U64 bb = 1ULL << sq;
-	return (bb << 8) | (bb >> 8) | (((bb >> 1) | (bb >> 9) | (bb << 7)) & 0x7F7F7F7F7F7F7F7FULL) |
+	return (bb << 8) | (bb >> 8) |
+		(((bb >> 1) | (bb >> 9) | (bb << 7)) & 0x7F7F7F7F7F7F7F7FULL) |
 		(((bb << 1) | (bb << 9) | (bb >> 7)) & 0xFEFEFEFEFEFEFEFEULL);
 }
 
@@ -438,11 +428,11 @@ static auto MakeMove(Position& pos, const Move& move) {
 	return !Attacked(pos, lsb(pos.color[1] & pos.pieces[KING]), false);
 }
 
-void add_move(Move* const movelist, int& num_moves, const int from, const int to, const int promo = PT_NB) {
+static void add_move(Move* const movelist, int& num_moves, const int from, const int to, const int promo = PT_NB) {
 	movelist[num_moves++] = Move{ from, to, promo };
 }
 
-void generate_pawn_moves(Move* const movelist, int& num_moves, U64 to_mask, const int offset) {
+static void generate_pawn_moves(Move* const movelist, int& num_moves, U64 to_mask, const int offset) {
 	while (to_mask) {
 		const int to = lsb(to_mask);
 		to_mask &= to_mask - 1;
@@ -458,7 +448,7 @@ void generate_pawn_moves(Move* const movelist, int& num_moves, U64 to_mask, cons
 	}
 }
 
-void generate_piece_moves(Move* const movelist,
+static void generate_piece_moves(Move* const movelist,
 	int& num_moves,
 	const Position& pos,
 	const int piece,
@@ -504,25 +494,6 @@ static int MoveGen(const Position& pos, Move* const movelist, const bool only_ca
 	return num_moves;
 }
 
-//Prints the bitboard
-static void PrintBitboard(bool r, U64 bb) {
-	if (r)
-		bb = flip(bb);
-	const char* s = "   +---+---+---+---+---+---+---+---+\n";
-	const char* t = "     A   B   C   D   E   F   G   H\n";
-	cout << t;
-	for (int i = 56; i >= 0; i -= 8) {
-		cout << s << " " << i / 8 + 1 << " ";
-		for (int x = 0; x < 8; x++) {
-			const char* c = (1ull << (i + x) & bb) ? "x" : " ";
-			cout << "| " << c << " ";
-		}
-		cout << "| " << i / 8 + 1 << endl;
-	}
-	cout << s;
-	cout << t << endl;
-}
-
 //Pretty-prints the position (including FEN and hash key)
 static void PrintBoard(Position& pos) {
 	bool r = pos.flipped;
@@ -556,11 +527,11 @@ static int TotalScore(int c) {
 	return score;
 }
 
-U64 Span(U64 bb) {
+static U64 Span(U64 bb) {
 	return bb | bb >> 8 | bb >> 16 | bb >> 24 | bb >> 32;
 }
 
-constexpr U64 Attacks(int pt, int sq, U64 blockers) {
+static constexpr U64 Attacks(int pt, int sq, U64 blockers) {
 	switch (pt) {
 	case ROOK:
 		return RookAttack(sq, blockers);
@@ -728,11 +699,8 @@ static int SearchAlpha(Position& pos,
 	const int beta,
 	int depth,
 	const int ply,
-	// minify enable filter delete
-	int64_t& nodes,
-	// minify disable filter delete
+	U64& nodes,
 	const int64_t stop_time,
-	int& stop,
 	Stack* const stack,
 	int64_t(&hh_table)[2][64][64],
 	vector<U64>& hash_history,
@@ -747,7 +715,7 @@ static int SearchAlpha(Position& pos,
 	const auto in_check = Attacked(pos, lsb(pos.color[0] & pos.pieces[KING]));
 	depth = in_check ? max(1, depth + 1) : depth;
 	const int improving = ply > 1 && static_eval > stack[ply - 2].score;
-	const int in_qsearch = depth <= 0;
+	int in_qsearch = depth <= 0;
 	if (in_qsearch && static_eval > alpha) {
 		if (static_eval >= beta) {
 			return beta;
@@ -766,29 +734,26 @@ static int SearchAlpha(Position& pos,
 		}
 
 		if (!in_check && alpha == beta - 1) {
+
 			// Reverse futility pruning
-			if (depth < 5) {
-				const int margins[] = { 50, 50, 100, 200, 300 };
-				if (static_eval - margins[depth - improving] >= beta) {
-					return beta;
-				}
+			if (depth < 8) {
+				if (static_eval - 71 * (depth - improving) >= beta)
+					return static_eval;
+				in_qsearch = static_eval + 238 * depth < alpha;
 			}
 
 			// Null move pruning
-			if (depth > 2 && static_eval >= beta && do_null) {
-				auto npos = pos;
+			if (depth > 2 && static_eval >= beta && do_null && pos.color[0] & ~pos.pieces[PAWN] & ~pos.pieces[KING]) {
+				Position npos = pos;
 				flip(npos);
 				npos.ep = 0;
 				if (-SearchAlpha(npos,
 					-beta,
-					-beta + 1,
-					depth - 4 - depth / 6,
+					-alpha,
+					depth - 4 - depth / 5 - min((static_eval - beta) / 196, 3),
 					ply + 1,
-					// minify enable filter delete
 					nodes,
-					// minify disable filter delete
 					stop_time,
-					stop,
 					stack,
 					hh_table,
 					hash_history,
@@ -798,7 +763,7 @@ static int SearchAlpha(Position& pos,
 			}
 
 			// Razoring
-			if (depth == 1 && static_eval + 200 < alpha) {
+			/*if (depth == 1 && static_eval + 200 < alpha) {
 				return SearchAlpha(pos,
 					alpha,
 					beta,
@@ -813,7 +778,7 @@ static int SearchAlpha(Position& pos,
 					hh_table,
 					hash_history,
 					do_null);
-			}
+			}*/
 		}
 	}
 
@@ -840,7 +805,7 @@ static int SearchAlpha(Position& pos,
 	}
 
 	// Exit early if out of time
-	if (stop || (ply > 0 && Now() >= stop_time)) { return 0; }
+	if (ply > 0 && Now() >= stop_time) { return 0; }
 
 	auto& moves = stack[ply].moves;
 	const int num_moves = MoveGen(pos, moves, in_qsearch);
@@ -884,18 +849,16 @@ static int SearchAlpha(Position& pos,
 		moves[best_move_index] = moves[i];
 		move_scores[best_move_index] = move_scores[i];
 
+		// Material gain
+		const S32 gain = max_material[move.promo] + max_material[PieceTypeOn(pos, move.to)];
+
 		// Delta pruning
-		if (in_qsearch && !in_check && static_eval + 50 + max_material[PieceTypeOn(pos, move.to)] < alpha) {
-			best_score = alpha;
+		if (in_qsearch && !in_check && static_eval + 50 + gain < alpha)
 			break;
-		}
 
 		// Forward futility pruning
-		if (!in_qsearch && !in_check && !(move == tt_move) &&
-			static_eval + 150 * depth + max_material[PieceTypeOn(pos, move.to)] < alpha) {
-			best_score = alpha;
+		if (ply > 0 && depth < 8 && !in_qsearch && !in_check && moves_evaluated && static_eval + 105 * depth + gain < alpha)
 			break;
-		}
 
 		auto npos = pos;
 		if (!MakeMove(npos, move)) {
@@ -918,7 +881,6 @@ static int SearchAlpha(Position& pos,
 				nodes,
 				// minify disable filter delete
 				stop_time,
-				stop,
 				stack,
 				hh_table,
 				hash_history);
@@ -940,7 +902,6 @@ static int SearchAlpha(Position& pos,
 				nodes,
 				// minify disable filter delete
 				stop_time,
-				stop,
 				stack,
 				hh_table,
 				hash_history);
@@ -960,7 +921,7 @@ static int SearchAlpha(Position& pos,
 		}
 
 		// Exit early if out of time
-		//if (stop || Now() >= stop_time) {hash_history.pop_back();return 0;}
+		if (Now() >= stop_time) {hash_history.pop_back();return 0;}
 
 		if (score > best_score) {
 			best_score = score;
@@ -1054,22 +1015,20 @@ static void PrintPv(const Position& pos, const Move move, vector<U64>& hash_hist
 	PrintPv(npos, tt_entry.move, hash_history);
 	hash_history.pop_back();
 }
-// minify disable filter delete
 
-auto SearchIteratively(Position& pos,
-	vector<U64>& hash_history,
-	// minify enable filter delete
-	int thread_id,
-	const bool is_bench,
-	// minify disable filter delete
-	const int64_t start_time,
-	const int allocated_time,
-	int& stop) {
+static int Permill() {
+	int pm = 0;
+	for (int n = 0; n < 1000; n++) {
+		if (transposition_table[n].key)
+			pm++;
+	}
+	return pm;
+}
+
+Move SearchIteratively(Position& pos,vector<U64>& hash_history,U64& nodes,const int allocated_time) {
+	start_time = Now();
 	Stack stack[128] = {};
 	int64_t hh_table[2][64][64] = {};
-	// minify enable filter delete
-	int64_t nodes = 0;
-	// minify disable filter delete
 
 	int score = 0;
 	for (int i = 1; i < MAX_DEPTH; ++i) {
@@ -1081,22 +1040,16 @@ auto SearchIteratively(Position& pos,
 			score + window,
 			i,
 			0,
-			// minify enable filter delete
 			nodes,
-			// minify disable filter delete
 			start_time + allocated_time,
-			stop,
 			stack,
 			hh_table,
 			hash_history);
 
 		// Hard time limit exceeded
-		if (Now() >= start_time + allocated_time || stop) {
+		if (Now() >= start_time + allocated_time) {
 			break;
 		}
-
-		// minify enable filter delete
-		if (thread_id == 0) {
 			const auto elapsed = Now() - start_time;
 
 			cout << "info";
@@ -1104,7 +1057,7 @@ auto SearchIteratively(Position& pos,
 			if (abs(newscore) < MATE_SCORE - MAX_DEPTH)
 				cout << " score cp " << newscore;
 			else
-				cout << " score mate " << (newscore > 0 ? (MATE_SCORE - newscore + 1)>>1 : -(MATE_SCORE + newscore)>>1);
+				cout << " score mate " << (newscore > 0 ? (MATE_SCORE - newscore + 1) >> 1 : -(MATE_SCORE + newscore) >> 1);
 			if (newscore >= score + window) {
 				cout << " lowerbound";
 			}
@@ -1116,23 +1069,13 @@ auto SearchIteratively(Position& pos,
 			if (elapsed > 0) {
 				cout << " nps " << nodes * 1000 / elapsed;
 			}
+			cout << " hashfull " << Permill();
 			// Not a lowerbound - a fail low won't have a meaningful PV.
 			if (newscore > score - window) {
 				cout << " pv";
 				PrintPv(pos, stack[0].move, hash_history);
 			}
 			cout << endl;
-
-			// OpenBench compliance
-			if (is_bench && i >= 10) {
-				cout << "Bench: ";
-				cout << elapsed << " ms ";
-				cout << nodes << " nodes ";
-				cout << nodes * 1000 / max(elapsed, static_cast<int64_t>(1)) << " nps";
-				cout << endl;
-				break;
-			}
-		}
 		// minify disable filter delete
 
 		if (newscore >= score + window || newscore <= score - window) {
@@ -1144,7 +1087,7 @@ auto SearchIteratively(Position& pos,
 		score = newscore;
 
 		// Early exit after completed ply
-		if (!research && Now() >= start_time + allocated_time / 2) {
+		if (!research && Now() > start_time + allocated_time / 2) {
 			break;
 		}
 	}
@@ -1424,18 +1367,65 @@ static void PrintTerm(string name, int idx) {
 	std::cout << ShowScore(name) << ShowScore(sw) << " " << ShowScore(sb) << " " << ShowScore(sw - sb) << endl;
 }
 
+// Function to put thousands
+// separators in the given integer
+string ThousandSeparator(uint64_t n)
+{
+	string ans = "";
+
+	// Convert the given integer
+	// to equivalent string
+	string num = to_string(n);
+
+	// Initialise count
+	int count = 0;
+
+	// Traverse the string in reverse
+	for (int i = (int)num.size() - 1; i >= 0; i--) {
+		ans.push_back(num[i]);
+
+		// If three characters
+		// are traversed
+		if (++count == 3) {
+			ans.push_back(' ');
+			count = 0;
+		}
+	}
+
+	// Reverse the string to get
+	// the desired output
+	reverse(ans.begin(), ans.end());
+
+	// If the given string is
+	// less than 1000
+	if (ans.size() % 4 == 0) {
+
+		// Remove ','
+		ans.erase(ans.begin());
+	}
+
+	return ans;
+}
+
+//Displays a summary
+static void ShowInfo(uint64_t time, uint64_t nodes) {
+	if (time < 1)
+		time = 1;
+	uint64_t nps = (nodes * 1000) / time;
+	printf("-----------------------------\n");
+	cout << "Time        : " << ThousandSeparator(time) << endl;
+	cout << "Nodes       : " << ThousandSeparator(nodes) << endl;
+	cout << "Nps         : " << ThousandSeparator(nps) << endl;
+	printf("-----------------------------\n");
+}
+
 static void UciBench() {
 	int stop = false;
 	const auto start = Now();
 	const auto allocated_time = 10000;
-	auto move = SearchIteratively(pos,
-		hash_history,
-		0,
-		true,
-		start,
-		allocated_time,
-		stop);
-	cout << "bestmove " << MoveToUci(move, pos.flipped) << endl;
+	U64 nodes = 0;
+	SearchIteratively(pos, hash_history, nodes, allocated_time);
+	ShowInfo(Now() - start, nodes);
 }
 
 static void UciEval() {
@@ -1469,7 +1459,7 @@ static void UciCommand(string str) {
 	string command = split[0];
 	if (command == "uci")
 	{
-		cout << "id name " << name << endl;
+		cout << "id name " << NAME << endl;
 		cout << "option name UCI_Elo type spin default " << options.eloMax << " min " << options.eloMin << " max " << options.eloMax << endl;
 		cout << "option name threads type spin default " << options.threads << " min 1 max 256" << endl;
 		cout << "option name hash type spin default " << (options.hash >> 15) << " min 1 max 65536" << endl;
@@ -1568,6 +1558,7 @@ static void UciCommand(string str) {
 		}
 	}
 	else if (command == "go") {
+		U64 nodes = 0;
 		int wtime = 0;
 		int btime = 0;
 		int mtime = 0;
@@ -1577,36 +1568,12 @@ static void UciCommand(string str) {
 			btime = stoi(value);
 		if (UciValue(split, "movetime", value))
 			mtime = stoi(value);
-		const auto start = Now();
 		const auto allocated_time = mtime ? mtime : ((pos.flipped ? btime : wtime) / 30);
 
-		// Lazy SMP
-		vector<thread> threads;
-		vector<int> stops(options.threads, false);
-		for (int i = 1; i < options.threads; ++i) {
-			threads.emplace_back([=, &stops]() mutable {
-				SearchIteratively(pos,
-					hash_history,
-					i,
-					false,
-					start,
-					1 << 30,
-					stops[i]);
-				});
-		}
 		const auto best_move = SearchIteratively(pos,
 			hash_history,
-			0,
-			false,
-			start,
-			allocated_time,
-			stops[0]);
-		for (int i = 1; i < options.threads; ++i) {
-			stops[i] = true;
-		}
-		for (int i = 1; i < options.threads; ++i) {
-			threads[i - 1].join();
-		}
+			nodes,
+			allocated_time);
 		cout << "bestmove " << MoveToUci(best_move, pos.flipped) << endl << flush;
 	}
 	else if (command == "bench")
@@ -1629,7 +1596,6 @@ static void UciLoop() {
 }
 
 int main(const int argc, const char** argv) {
-	setbuf(stdout, 0);
 	PrintWelcome();
 	InitEval();
 	transposition_table.resize(options.hash);
