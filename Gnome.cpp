@@ -27,20 +27,16 @@
 #define VERSION "2025-10-13"
 
 S64 start_time = 0;
+
 using namespace std;
 
 string defFen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq -";
-string tstFen = "1k6/1pp1R1p1/4P3/4b1P1/5p2/3q4/1P2R1PK/8 b - - 0 1";
-
-static void PrintWelcome() {
-	cout << NAME << " " << VERSION << endl;
-}
+//string tstFen = "1k6/1pp1R1p1/4P3/4b1P1/5p2/3q4/1P2R1PK/8 b - - 0 1";
 
 struct SOptions {
 	int elo = 2500;
 	int eloMin = 0;
 	int eloMax = 2500;
-	int threads = 1;
 	U64 hash = 64ULL << 15;
 
 	string bishop = "32 55 -36 -4";
@@ -56,8 +52,7 @@ struct SOptions {
 	string rook = "72 1 30 12";
 	string tempo = "16 8";
 
-
-};
+}options;
 
 enum Term { PASSED = 6, STRUCTURE, TERM_NB };
 
@@ -101,7 +96,7 @@ enum Rank : int { RANK_1, RANK_2, RANK_3, RANK_4, RANK_5, RANK_6, RANK_7, RANK_8
 const U64 bbLight = 0xaa55aa55aa55aa55ull;
 const U64 bbDark = 0x55aa55aa55aa55aaull;
 
-static S64 Now() {
+static S64 GetTimeMs() {
 	return (clock() * 1000) / CLOCKS_PER_SEC;
 }
 
@@ -115,8 +110,8 @@ struct Position {
 							0x800000000000008ULL,
 							0x1000000000000010ULL };
 	U64 ep = 0x0ULL;
-	int flipped = false;
-};
+	bool flipped = false;
+}pos;
 
 struct Move {
 	int from = 0;
@@ -140,6 +135,15 @@ struct TT_Entry {
 	int depth;
 	U16 flag;
 };
+
+struct SSearchInfo {
+	bool stop = false;
+	int depthLimit = MAX_DEPTH;
+	S64 timeStart = 0;
+	S64 timeLimit = 0;
+	U64 nodes = 0;
+	U64 nodesLimit = 0;
+}info;
 
 int phase = 0;
 
@@ -175,8 +179,6 @@ int bonusMax[PT_NB][RANK_NB][FILE_NB] = {};
 int outpost[2][2] = {};
 int tempo = 0;
 int contempt = 0;
-SOptions options;
-Position pos;
 vector<U64> hash_history;
 
 const auto keys = []() {
@@ -194,27 +196,28 @@ const auto keys = []() {
 
 // Engine options
 auto num_tt_entries = 64ULL << 15;  // The first value is the size in megabytes
-auto thread_count = 1;
-// Possible tournament settings (4095 bytes exe)
-// auto num_tt_entries = 1ULL << 30;  // 32 GB
-// auto thread_count = 52;
 
 vector<TT_Entry> transposition_table;
 
+static void PrintWelcome() {
+	cout << NAME << " " << VERSION << endl;
+}
+
+void TranspositionClear() {
+	memset(transposition_table.data(), 0, sizeof(TT_Entry) * transposition_table.size());
+}
+
+
 static U64 flip(const U64 bb) {
-	//return __builtin_bswap64(bb);
 	return _byteswap_uint64(bb);
 }
 
 static U64 lsb(const U64 bb) {
-	//return __builtin_ctzll(bb);
 	return _tzcnt_u64(bb);
 }
 
 static U64 count(const U64 bb) {
-	//return __builtin_popcountll(bb);
 	return _mm_popcnt_u64(bb);
-	//return popcount(bb);
 }
 
 static U64 East(const U64 bb) {
@@ -269,7 +272,6 @@ static constexpr Rank RankOf(int s) { return Rank(s >> 3); }
 static constexpr File FileOf(int s) { return File(s & 0b111); }
 
 static int Distance(int s1, int s2) {
-	//cout << FileOf(s1) << " " << FileOf(s2) << " " << RankOf(s1) << " " << RankOf(s2)<<endl;
 	return max(abs(FileOf(s1) - FileOf(s2)), abs(RankOf(s1) - RankOf(s2))) - 4;
 };
 
@@ -694,17 +696,82 @@ static auto GetHash(const Position& pos) {
 	return hash;
 }
 
+static void CheckUp() {
+	if ((info.timeLimit && GetTimeMs() - info.timeStart > info.timeLimit) || (info.nodesLimit && info.nodes > info.nodesLimit))
+		info.stop = true;
+}
+
+static int Permill() {
+	int pm = 0;
+	for (int n = 0; n < 1000; n++) {
+		if (transposition_table[n].key)
+			pm++;
+	}
+	return pm;
+}
+
+static bool IsPseudolegalMove(const Position& pos, const Move& move) {
+	Move moves[256];
+	const int num_moves = MoveGen(pos, moves, false);
+	for (int i = 0; i < num_moves; ++i) {
+		if (moves[i] == move) {
+			return true;
+		}
+	}
+	return false;
+}
+
+
+static void PrintPv(const Position& pos, const Move move, vector<U64>& hash_history) {
+	// Check move pseudolegality
+	if (!IsPseudolegalMove(pos, move)) {
+		return;
+	}
+
+	// Check move legality
+	auto npos = pos;
+	if (!MakeMove(npos, move)) {
+		return;
+	}
+
+	// Print current move
+	cout << " " << MoveToUci(move, pos.flipped);
+
+	// Probe the TT in the resulting position
+	const U64 tt_key = GetHash(npos);
+	const TT_Entry& tt_entry = transposition_table[tt_key % num_tt_entries];
+
+	// Only continue if the move was valid and comes from a PV search
+	if (tt_entry.key != tt_key || tt_entry.move == Move{} || tt_entry.flag != 0) {
+		return;
+	}
+
+	// Avoid infinite recursion on a repetition
+	for (const auto old_hash : hash_history) {
+		if (old_hash == tt_key) {
+			return;
+		}
+	}
+
+	hash_history.emplace_back(tt_key);
+	PrintPv(npos, tt_entry.move, hash_history);
+	hash_history.pop_back();
+}
+
 static int SearchAlpha(Position& pos,
 	int alpha,
 	const int beta,
 	int depth,
 	const int ply,
-	U64& nodes,
-	const int64_t stop_time,
 	Stack* const stack,
 	int64_t(&hh_table)[2][64][64],
 	vector<U64>& hash_history,
 	const int do_null = true) {
+	// Exit early if out of time
+	if ((++info.nodes & 0xffff) == 0)
+		CheckUp();
+	if (info.stop)
+		return 0;
 	const int static_eval = Eval(pos);
 	// Don't overflow the stack
 	if (ply > 127) {
@@ -752,8 +819,6 @@ static int SearchAlpha(Position& pos,
 					-alpha,
 					depth - 4 - depth / 5 - min((static_eval - beta) / 196, 3),
 					ply + 1,
-					nodes,
-					stop_time,
 					stack,
 					hh_table,
 					hash_history,
@@ -803,9 +868,6 @@ static int SearchAlpha(Position& pos,
 	else if (depth > 3) {
 		depth--;
 	}
-
-	// Exit early if out of time
-	if (ply > 0 && Now() >= stop_time) { return 0; }
 
 	auto& moves = stack[ply].moves;
 	const int num_moves = MoveGen(pos, moves, in_qsearch);
@@ -865,10 +927,6 @@ static int SearchAlpha(Position& pos,
 			continue;
 		}
 
-		// minify enable filter delete
-		nodes++;
-		// minify disable filter delete
-
 		int score;
 		if (in_qsearch || !moves_evaluated) {
 		full_window:
@@ -877,10 +935,6 @@ static int SearchAlpha(Position& pos,
 				-alpha,
 				depth - 1,
 				ply + 1,
-				// minify enable filter delete
-				nodes,
-				// minify disable filter delete
-				stop_time,
 				stack,
 				hh_table,
 				hash_history);
@@ -898,10 +952,6 @@ static int SearchAlpha(Position& pos,
 				-alpha,
 				depth - reduction - 1,
 				ply + 1,
-				// minify enable filter delete
-				nodes,
-				// minify disable filter delete
-				stop_time,
 				stack,
 				hh_table,
 				hash_history);
@@ -921,7 +971,7 @@ static int SearchAlpha(Position& pos,
 		}
 
 		// Exit early if out of time
-		if (Now() >= stop_time) {hash_history.pop_back();return 0;}
+		if (info.stop) {hash_history.pop_back();return 0;}
 
 		if (score > best_score) {
 			best_score = score;
@@ -930,6 +980,28 @@ static int SearchAlpha(Position& pos,
 				tt_flag = 0;  // Exact flag
 				alpha = score;
 				stack[ply].move = move;
+
+				if (!ply) {
+					cout << "info";
+					cout << " depth " << depth;
+					if (abs(score) < MATE_SCORE - MAX_DEPTH)
+						cout << " score cp " << score;
+					else
+						cout << " score mate " << (score > 0 ? (MATE_SCORE - score + 1) >> 1 : -(MATE_SCORE + score) >> 1);
+					const auto elapsed = GetTimeMs() - info.timeStart;
+					cout << " alpha " << alpha;
+					cout << " beta " << beta;
+					cout << " time " << elapsed;
+					cout << " nodes " << info.nodes;
+					if (elapsed > 0) {
+						cout << " nps " << info.nodes * 1000 / elapsed;
+					}
+					cout << " hashfull " << Permill();
+					cout << " currmovenumber " << moves_evaluated;
+					cout << " pv";
+					PrintPv(pos, stack[0].move, hash_history);
+					cout << endl;
+				}
 			}
 		}
 		else if (!in_qsearch && !in_check && alpha == beta - 1 && depth <= 3 && moves_evaluated >= (depth * 3) + 2 &&
@@ -969,115 +1041,31 @@ static int SearchAlpha(Position& pos,
 	return alpha;
 }
 
-static bool IsPseudolegalMove(const Position& pos, const Move& move) {
-	Move moves[256];
-	const int num_moves = MoveGen(pos, moves, false);
-	for (int i = 0; i < num_moves; ++i) {
-		if (moves[i] == move) {
-			return true;
-		}
-	}
-	return false;
-}
-
-static void PrintPv(const Position& pos, const Move move, vector<U64>& hash_history) {
-	// Check move pseudolegality
-	if (!IsPseudolegalMove(pos, move)) {
-		return;
-	}
-
-	// Check move legality
-	auto npos = pos;
-	if (!MakeMove(npos, move)) {
-		return;
-	}
-
-	// Print current move
-	cout << " " << MoveToUci(move, pos.flipped);
-
-	// Probe the TT in the resulting position
-	const U64 tt_key = GetHash(npos);
-	const TT_Entry& tt_entry = transposition_table[tt_key % num_tt_entries];
-
-	// Only continue if the move was valid and comes from a PV search
-	if (tt_entry.key != tt_key || tt_entry.move == Move{} || tt_entry.flag != 0) {
-		return;
-	}
-
-	// Avoid infinite recursion on a repetition
-	for (const auto old_hash : hash_history) {
-		if (old_hash == tt_key) {
-			return;
-		}
-	}
-
-	hash_history.emplace_back(tt_key);
-	PrintPv(npos, tt_entry.move, hash_history);
-	hash_history.pop_back();
-}
-
-static int Permill() {
-	int pm = 0;
-	for (int n = 0; n < 1000; n++) {
-		if (transposition_table[n].key)
-			pm++;
-	}
-	return pm;
-}
-
-Move SearchIteratively(Position& pos,vector<U64>& hash_history,U64& nodes,const int allocated_time) {
-	start_time = Now();
+static Move SearchIteratively(Position& pos, vector<U64>& hash_history) {
+	info.stop = false;
+	info.nodes = 0;
+	info.timeStart = GetTimeMs();
+	TranspositionClear();
 	Stack stack[128] = {};
 	int64_t hh_table[2][64][64] = {};
 
 	int score = 0;
-	for (int i = 1; i < MAX_DEPTH; ++i) {
+	for (int i = 1; i <= info.depthLimit; ++i) {
 		auto window = 40;
 		auto research = 0;
 	research:
-		const auto newscore = SearchAlpha(pos,
-			score - window,
-			score + window,
+		int alpha = score - window;
+		int beta = score + window;
+		const int newscore = SearchAlpha(pos,
+			alpha,
+			beta,
 			i,
 			0,
-			nodes,
-			start_time + allocated_time,
 			stack,
 			hh_table,
 			hash_history);
-
-		// Hard time limit exceeded
-		if (Now() >= start_time + allocated_time) {
+		if (info.stop)
 			break;
-		}
-			const auto elapsed = Now() - start_time;
-
-			cout << "info";
-			cout << " depth " << i;
-			if (abs(newscore) < MATE_SCORE - MAX_DEPTH)
-				cout << " score cp " << newscore;
-			else
-				cout << " score mate " << (newscore > 0 ? (MATE_SCORE - newscore + 1) >> 1 : -(MATE_SCORE + newscore) >> 1);
-			if (newscore >= score + window) {
-				cout << " lowerbound";
-			}
-			else if (newscore <= score - window) {
-				cout << " upperbound";
-			}
-			cout << " time " << elapsed;
-			cout << " nodes " << nodes;
-			if (elapsed > 0) {
-				cout << " nps " << nodes * 1000 / elapsed;
-			}
-			cout << " hashfull " << Permill();
-			// Not a lowerbound - a fail low won't have a meaningful PV.
-			if (newscore > score - window) {
-				cout << " pv";
-				PrintPv(pos, stack[0].move, hash_history);
-			}
-			cout << endl;
-		// minify disable filter delete
-
 		if (newscore >= score + window || newscore <= score - window) {
 			window <<= ++research;
 			score = newscore;
@@ -1087,7 +1075,7 @@ Move SearchIteratively(Position& pos,vector<U64>& hash_history,U64& nodes,const 
 		score = newscore;
 
 		// Early exit after completed ply
-		if (!research && Now() > start_time + allocated_time / 2) {
+		if (!research && GetTimeMs() - info.timeStart > info.timeLimit / 2) {
 			break;
 		}
 	}
@@ -1420,12 +1408,11 @@ static void ShowInfo(uint64_t time, uint64_t nodes) {
 }
 
 static void UciBench() {
-	int stop = false;
-	const auto start = Now();
-	const auto allocated_time = 10000;
-	U64 nodes = 0;
-	SearchIteratively(pos, hash_history, nodes, allocated_time);
-	ShowInfo(Now() - start, nodes);
+	info.depthLimit = MAX_DEPTH;
+	info.nodesLimit = 0;
+	info.timeLimit = 10000;
+	SearchIteratively(pos, hash_history);
+	ShowInfo(GetTimeMs() - info.timeStart, info.nodes);
 }
 
 static void UciEval() {
@@ -1461,7 +1448,6 @@ static void UciCommand(string str) {
 	{
 		cout << "id name " << NAME << endl;
 		cout << "option name UCI_Elo type spin default " << options.eloMax << " min " << options.eloMin << " max " << options.eloMax << endl;
-		cout << "option name threads type spin default " << options.threads << " min 1 max 256" << endl;
 		cout << "option name hash type spin default " << (options.hash >> 15) << " min 1 max 65536" << endl;
 		cout << "option name bishop type string default " << options.bishop << endl;
 		cout << "option name material type string default " << options.material << endl;
@@ -1483,15 +1469,12 @@ static void UciCommand(string str) {
 				options.elo = stoi(value);
 				InitEval();
 			}
-			else if (name == "threads") {
-				options.threads = stoi(value);
-				options.threads = max(1, min(256, options.threads));
-			}
 			else if (name == "hash") {
 				options.hash = stoi(value);
-				options.hash = min(max(options.hash, 1ULL), 65536ULL) * 1024 * 1024 / sizeof(TT_Entry);
-				transposition_table.resize(options.hash);
+				options.hash = min(max(options.hash, 1ULL), 0xffffULL) * 1000000 / sizeof(TT_Entry);
 				transposition_table.clear();
+				transposition_table.resize(options.hash);
+				transposition_table.shrink_to_fit();
 			}
 			else if (name == "bishop")
 				options.bishop = value;
@@ -1558,22 +1541,37 @@ static void UciCommand(string str) {
 		}
 	}
 	else if (command == "go") {
-		U64 nodes = 0;
+		int depth = MAX_DEPTH;
+		int nodes = 0;
 		int wtime = 0;
 		int btime = 0;
-		int mtime = 0;
+		int winc = 0;
+		int binc = 0;
+		int movetime = 0;
+		int movestogo = 32;
+		if (UciValue(split, "depth", value))
+			depth = stoi(value);
+		if (UciValue(split, "nodes", value))
+			nodes = stoi(value);
 		if (UciValue(split, "wtime", value))
 			wtime = stoi(value);
 		if (UciValue(split, "btime", value))
 			btime = stoi(value);
+		if (UciValue(split, "winc", value))
+			winc = stoi(value);
+		if (UciValue(split, "binc", value))
+			binc = stoi(value);
 		if (UciValue(split, "movetime", value))
-			mtime = stoi(value);
-		const auto allocated_time = mtime ? mtime : ((pos.flipped ? btime : wtime) / 30);
-
-		const auto best_move = SearchIteratively(pos,
-			hash_history,
-			nodes,
-			allocated_time);
+			movetime = stoi(value);
+		if (UciValue(split, "movestogo", value))
+			movestogo = stoi(value);
+		int ct = pos.flipped ? btime : wtime;
+		int inc = pos.flipped ? binc : winc;
+		int st = min(ct / movestogo + inc, ct / 2);
+		info.depthLimit = depth;
+		info.nodesLimit = nodes;
+		info.timeLimit = movetime ? movetime : st;
+		const Move best_move = SearchIteratively(pos, hash_history);
 		cout << "bestmove " << MoveToUci(best_move, pos.flipped) << endl << flush;
 	}
 	else if (command == "bench")
@@ -1599,8 +1597,5 @@ int main(const int argc, const char** argv) {
 	PrintWelcome();
 	InitEval();
 	transposition_table.resize(options.hash);
-	//UciCommand("position startpos moves c2c4 e7e5 b1c3 g8f6 g1f3 b8c6 e2e3 f8b4 d2d4 e5d4 e3d4 e8g8 f1e2 d7d5 e1g1 d5c4 e2c4 c8g4 a2a3 g4f3 d1f3 d8d4 a3b4 d4c4 b4b5 c6d8 a1a4 c4b3 f1d1 f8e8 c1g5 f6d7 g5d8 a8d8 f3d3 d7f8 d3d8 e8d8 d1d8 b3b2 c3d1 b2f6 d8a8 f6e5 d1e3 e5b5 a4a7 b5b1 e3f1 b1b6 f1e3 f7f6 h2h3 g8f7 e3d5 b6b1 g1h2 f8e6 d5c7 e6f4 c7e8 f7g6 a7a4 f4e2 a4a1 b1f5 f2f3 f5e5 h2h1 e2g3 h1h2 b7b5 a1a7 g3e2 h2h1 g6h6 a7d7 b5b4 d7d1 b4b3 e8d6 e2g3 h1g1 e5e2 d6f7 h6g6 f7h8 g6h5 a8d8 b3b2 d8d5 f6f5 h3h4 h5h4 d5d4 f5f4 d4f4 h4h5 f4d4 e2e3 g1h2 b2b1q d4d5 b1f5 h2g3 e3g5 g3f2 f5c2 f2e1 c2d1 d5d1 g5e3 e1f1 e3e8 d1d5 g7g5 d5d4 e8h8 d4e4 h5g6 f1e1 h7h5 e1f1 h5h4 f1e1 h8c3 e1f2 c3c5 f2f1 g6f5 e4g4 c5c1 f1f2 c1d2 f2f1 d2d3 f1f2 d3c2 f2f1 c2c3 f1e2 c3b2 e2f1 b2a3 f1e2 a3a2 e2f1 a2b3 f1e2 b3b5 e2f2 b5e5 f2f1 e5e3 g4e4 e3c1 f1f2 c1b2 f2g1 b2c3 g1f2 c3c5 f2f1 c5b5 f1e1 b5d3 e1f2 d3d6 f2f1 d6a6 f1e1 a6b6 e1f1 b6b1 f1f2 b1c2 f2f1 c2c7 f1e2 c7g3 e4g4 g3h2 e2f1 h2c7 f1e2 f5f6 g4e4 c7g3 e4g4 g3e5 g4e4 e5b2 e2f1 b2c1 f1f2 c1c5 f2f1 c5b5 f1e1 b5b1 e1f2 b1c2 f2g1 c2d1 g1f2 d1d2 f2f1 f6g6 f1g1 d2c1 g1f2 g6h5 e4g4 c1d2 f2f1 d2c3 f1f2 c3b2 f2f1 h4h3 g2h3 b2h2 f1e1 h2h3 e1e2 h3h2 e2e3 h5g6 g4c4 h2e5 e3f2 g6f5 c4g4 e5h2 f2f1 h2d2 g4e4 d2b2 f1g1 b2c1 g1g2 c1c6 g2f2 c6c2 f2g1 c2b2 g1f1 b2d2 f1g1 d2d1 g1f2 d1b3 f2g2 b3b8 g2h3 b8b2 h3g3 b2c2 e4e8 c2c7 g3g2 c7d6 e8e4 d6d3 g2f2 f5f6 f2g2 d3d2 g2g1 d2c2 g1f1 c2h2 e4g4 h2a2 g4e4 f6f5 f1g1 a2a3 g1f2 a3c5 f2g2 c5c3 g2f2 c3d3 f2g2 d3b1 e4e2 b1b7 g2g3 b7a6 e2d2 a6c4 g3f2 c4c5 f2g2 c5e5 d2d7 e5e2 g2g3 e2e3 g3g2 f5e6");
-	//UciCommand("go wtime 1 btime 9146 winc 0 binc 0");
-	//UciCommand("go movetime 3000");
 	UciLoop();
 }
