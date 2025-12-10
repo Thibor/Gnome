@@ -13,8 +13,8 @@ using namespace std;
 #define S32 signed __int32
 #define S64 signed __int64
 #define U64 unsigned __int64
-#define NAME "Shark"
-#define VERSION "2025-10-13"
+#define NAME "Gnome"
+#define VERSION "2025-12-25"
 #define START_FEN "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
 enum Color { WHITE, BLACK, COLOR_NB };
