@@ -21,7 +21,7 @@ enum Color { WHITE, BLACK, COLOR_NB };
 enum PieceType { PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING, PT_NB };
 enum Bound { LOWER, UPPER, EXACT };
 enum Phase { MG, EG, PHASE_NB };
-enum Term { PASSED = 6, STRUCTURE, TERM_NB };
+enum Term { PASSED = 6, MOBILITY, TERM_NB };
 
 enum Square : int {
 	SQ_A1, SQ_B1, SQ_C1, SQ_D1, SQ_E1, SQ_F1, SQ_G1, SQ_H1,
@@ -855,14 +855,7 @@ static int EvalPosition(Position& pos) {
 		U64 bbAll = pos.color[0] | pos.color[1];
 		const U64 bbPawnsUs = pos.color[0] & pos.pieces[PAWN];
 		const U64 bbPawnsEn = pos.color[1] & pos.pieces[PAWN];
-		const U64 bbPawnDefense = NW(bbPawnsUs) | NE(bbPawnsUs);
 		const U64 bbPawnAttack = SE(bbPawnsEn) | SW(bbPawnsEn);
-		const U64 bbSpan = Span(bbPawnAttack);
-		//const U64 bbOutpost = ~bbSpan & bbOutpostRanks;
-		//const Square sqKUs = LSB(pos.color[0] & pos.pieces[KING]);
-		//const Square sqKEn = LSB(pos.color[1] & pos.pieces[KING]);
-		//U64 bbConnected = bbPawnDefense | South(bbPawnDefense);
-		//bbConnected |= South(bbConnected);
 		U64 lowRanks = Rank2BB | Rank3BB;
 		U64 bbBlocked = bbPawnsUs & (South(bbAll) | lowRanks);
 		U64 bbMobilityArea = ~(bbBlocked | ((pos.pieces[QUEEN] | pos.pieces[KING]) & pos.color[0]) | bbPawnAttack);
@@ -875,12 +868,11 @@ static int EvalPosition(Position& pos) {
 				copy &= copy - 1;
 				const int rank = sq / 8;
 				const int file = sq % 8;
-				int score = bonus[pt][rank][file];
+				scores[pt][pos.flipped] += bonus[pt][rank][file];
 				if (pt > PAWN && pt < KING) {
 					U64 bbAttacks = Attacks(pt, sq, bbAll);
-					score += MobilityBonus[pt - KNIGHT][Popcount(bbAttacks & bbMobilityArea)];
+					scores[MOBILITY][pos.flipped] += MobilityBonus[pt - KNIGHT][Popcount(bbAttacks & bbMobilityArea)];
 				}
-				scores[pt][pos.flipped] += score;
 			}
 		}
 		score += TotalScore(pos.flipped);
@@ -1348,8 +1340,7 @@ static void UciEval() {
 	PrintTerm("Rook", ROOK);
 	PrintTerm("Queen", QUEEN);
 	PrintTerm("King", KING);
-	PrintTerm("Passed", PASSED);
-	PrintTerm("Structure", STRUCTURE);
+	PrintTerm("Mobility", MOBILITY);
 	cout << "phase " << phase << endl;
 	cout << "score " << score << endl;
 }
