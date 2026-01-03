@@ -1117,7 +1117,7 @@ static int SearchAlpha(Position& pos, int alpha, const int beta, int depth, cons
 		S32 score;
 		S32 reduction = depth > 3 && num_moves_evaluated > 1
 			? max(num_moves_evaluated / 13 + depth / 14 + (alpha == beta - 1) + !improving -
-				min(max(hh_table[pos.flipped][!gain][move.from][move.to] / 128, -2), 2),0): 0;
+				min(max(hh_table[pos.flipped][!gain][move.from][move.to] / 128, -2), 2), 0) : 0;
 		while (num_moves_evaluated &&
 			(score = -SearchAlpha(npos,
 				-alpha - 1,
@@ -1207,21 +1207,21 @@ static void SearchIteratively(Position& pos) {
 			break;
 		}
 	}
-	cout << "bestmove " << MoveToUci(stack[0].move, pos.flipped) << endl << flush;
+	if (info.post)
+		cout << "bestmove " << MoveToUci(stack[0].move, pos.flipped) << endl << flush;
 }
 
 static inline void PerftDriver(Position pos, int depth) {
-	if (!depth) {
-		info.nodes++;
-		return;
-	}
 	Move list[256];
 	const S32 num_moves = MoveGen(pos, list, false);
 	for (int n = 0; n < num_moves; n++) {
 		Position npos = pos;
 		if (!MakeMove(npos, list[n]))
 			continue;
-		PerftDriver(npos, depth - 1);
+		if (depth)
+			PerftDriver(npos, depth - 1);
+		else
+			info.nodes++;
 	}
 }
 
@@ -1298,7 +1298,7 @@ static void UciPerformance()
 	SetFen(pos, START_FEN);
 	while (GetTimeMs() - info.timeStart < 3000)
 	{
-		PerftDriver(pos, ++depth);
+		PerftDriver(pos, depth++);
 		printf("%2d. %8llu %12llu\n", depth, GetTimeMs() - info.timeStart, info.nodes);
 	}
 	PrintSummary(GetTimeMs() - info.timeStart, info.nodes);
