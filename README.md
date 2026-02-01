@@ -4,7 +4,7 @@
 <img src="/Resources/gnome.png" />
     <br>
     <br>
-    <b><i>Uci chess engine 2200 elo.</i></b>
+    <b><i>Small uci chess engine 2300 elo.</i></b>
     <br>
     <br>
     <img src="https://img.shields.io/github/downloads/Thibor/Gnome/total?color=critical&style=for-the-badge">
