@@ -2,6 +2,10 @@
 #include <sstream> 
 #include <random>
 
+#if defined(_WIN32) || defined(_WIN64)
+#include <windows.h>
+#endif
+
 using namespace std;
 
 #define MAX_DEPTH 100
@@ -494,7 +498,7 @@ static int PieceTypeOn(const Position& pos, const int sq) {
 	return PT_NB;
 }
 
-static void ResetLimit() {
+static void ResetInfo() {
 	info.post = true;
 	info.stop = false;
 	info.nodes = 0;
@@ -698,9 +702,45 @@ static auto GetHash(const Position& pos) {
 	return hash;
 }
 
-static void CheckUp() {
-	if ((info.timeLimit && GetTimeMs() - info.timeStart > info.timeLimit) || (info.nodesLimit && info.nodes > info.nodesLimit))
-		info.stop = true;
+static bool InputAvailable() {
+	static HANDLE hstdin = 0;
+	static bool pipe = false;
+	unsigned long dw = 0;
+	if (!hstdin) {
+		hstdin = GetStdHandle(STD_INPUT_HANDLE);
+		pipe = !GetConsoleMode(hstdin, &dw);
+		if (!pipe)
+		{
+			SetConsoleMode(hstdin, dw & ~(ENABLE_MOUSE_INPUT | ENABLE_WINDOW_INPUT));
+			FlushConsoleInputBuffer(hstdin);
+		}
+		else
+		{
+			setvbuf(stdin, NULL, _IONBF, 0);
+			setvbuf(stdout, NULL, _IONBF, 0);
+		}
+	}
+	if (pipe)
+		PeekNamedPipe(hstdin, 0, 0, 0, &dw, 0);
+	else
+		GetNumberOfConsoleInputEvents(hstdin, &dw);
+	return dw > 1;
+}
+
+static bool CheckUp() {
+	if ((++info.nodes & 0xffff) == 0) {
+		if (info.timeLimit && GetTimeMs() - info.timeStart > info.timeLimit)
+			info.stop = true;
+		if (info.nodesLimit && info.nodes > info.nodesLimit)
+			info.stop = true;
+		if (InputAvailable()) {
+			string line;
+			getline(cin, line);
+			if (line == "stop")
+				info.stop = true;
+		}
+	}
+	return info.stop;
 }
 
 static bool IsPseudolegalMove(const Position& pos, const Move& move) {
@@ -983,9 +1023,7 @@ static void InitEval() {
 }
 
 static int SearchAlpha(Position& pos, int alpha, const int beta, int depth, const int ply, Stack* const stack, const bool do_null = true) {
-	if ((++info.nodes & 0xffff) == 0)
-		CheckUp();
-	if (info.stop)
+	if (CheckUp())
 		return 0;
 
 	int static_eval = EvalPosition(pos);
@@ -1137,10 +1175,8 @@ static int SearchAlpha(Position& pos, int alpha, const int beta, int depth, cons
 				stack);
 
 		// Exit early if out of time
-		if (info.stop) {
-			hash_count--;
-			return 0;
-		}
+		if (info.stop)
+			break;
 
 		if (score > best_score)
 			best_score = score;
@@ -1190,6 +1226,8 @@ static int SearchAlpha(Position& pos, int alpha, const int beta, int depth, cons
 			break;
 	}
 	hash_count--;
+	if (info.stop)
+		return 0;
 	if (best_score == -INF)
 		return in_check ? ply - MATE : 0;
 	tt_entry = { tt_key, best_move, tt_flag,S16(best_score), S16(!in_qsearch * depth) };
@@ -1271,10 +1309,16 @@ static void SetFen(Position& pos, const string& fen) {
 		FlipPosition(pos);
 }
 
+void PrintPerformanceHeader() {
+	printf("-----------------------------\n");
+	printf("ply      time        nodes\n");
+	printf("-----------------------------\n");
+}
+
 //start benchmark
 static void UciBench() {
-	ResetLimit();
-	printf("Benchmark Test\n");
+	ResetInfo();
+	PrintPerformanceHeader();
 	SetFen(pos, START_FEN);
 	info.depthLimit = 0;
 	info.post = false;
@@ -1292,8 +1336,8 @@ static void UciBench() {
 //start performance test
 static void UciPerformance()
 {
-	ResetLimit();
-	printf("Performance Test\n");
+	ResetInfo();
+	PrintPerformanceHeader();
 	int depth = 0;
 	SetFen(pos, START_FEN);
 	while (GetTimeMs() - info.timeStart < 3000)
@@ -1378,7 +1422,7 @@ static void ParseGo(string command) {
 	ss >> token;
 	if (token != "go")
 		return;
-	ResetLimit();
+	ResetInfo();
 	int wtime = 0;
 	int btime = 0;
 	int winc = 0;
