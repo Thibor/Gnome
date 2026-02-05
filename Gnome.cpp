@@ -12,7 +12,7 @@ using namespace std;
 #define U64 unsigned __int64
 #define NAME "Gnome"
 #define VERSION "2025-10-13"
-#define START_FEN "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1 "
+#define START_FEN "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
 // piece encoding
 enum pieces { e, P, N, B, R, Q, K, p, n, b, r, q, k, o };
