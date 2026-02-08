@@ -11,7 +11,7 @@ using namespace std;
 #define S64 signed __int64
 #define U64 unsigned __int64
 #define NAME "Gnome"
-#define VERSION "2025-10-13"
+#define VERSION "2026-02-08"
 #define START_FEN "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
 // piece encoding
