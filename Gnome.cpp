@@ -2,7 +2,6 @@
 #include <sstream>
 #include <vector>
 
-
 using namespace std;
 
 #define INF 32001
@@ -52,38 +51,8 @@ SearchInfo info;
 string pieces = " ANBRQKanbrqk";
 string promotedPieces = "__nbrq__nbrq_";
 
-int material_score[13] = {
-	  0,      // empty square score
-	100,      // white pawn score
-	310,      // white knight score
-	320,      // white bishop score
-	500,      // white rook score
-   900,      // white queen score
-  10000,      // white king score
-   -100,      // black pawn score
-   -310,      // black knight score
-   -320,      // black bishop score
-   -500,      // black rook score
-  -900,      // black queen score
- -10000,      // black king score
-
-};
-
-// castling rights
-
-/*
-							 castle   move     in      in
-							  right    map     binary  decimal
-
-		white king  moved:     1111 & 1100  =  1100    12
-  white king's rook moved:     1111 & 1110  =  1110    14
- white queen's rook moved:     1111 & 1101  =  1101    13
-
-		 black king moved:     1111 & 0011  =  1011    3
-  black king's rook moved:     1111 & 1011  =  1011    11
- black queen's rook moved:     1111 & 0111  =  0111    7
-
-*/
+const int material_score[13] = { 0,100,320,330,500,900,10000,-100,-320,-330,-500,-900,-10000 };
+const int piece_values[13] = { 0, 100, 200, 300, 400, 500, 600, 100, 200, 300, 400, 500,600 };
 
 int castling_rights[128] = {
 	 7, 15, 15, 15,  3, 15, 15, 11,  o, o, o, o, o, o, o, o,
@@ -177,14 +146,23 @@ const int mirror_score[128] =
 	a8, b8, c8, d8, e8, f8, g8, h8,    o, o, o, o, o, o, o, o
 };
 
+// piece move offsets
+int knight_offsets[8] = { 33, 31, 18, 14, -33, -31, -18, -14 };
+int bishop_offsets[4] = { 15, 17, -15, -17 };
+int rook_offsets[4] = { 16, -16, 1, -1 };
+int king_offsets[8] = { 16, -16, 1, -1, 15, 17, -15, -17 };
+
 int side;
 int castle;
 int enpassant;
 int king_square[2];
 int board[128];
-/*
-	Move formatting
+int history_moves[13][128];
+int killer_moves[2][MAX_PLY];
+int pv_table[MAX_PLY][MAX_PLY];
+int pv_length[MAX_PLY];
 
+/*
 	0000 0000 0000 0000 0111 1111       source square
 	0000 0000 0011 1111 1000 0000       target square
 	0000 0011 1100 0000 0000 0000       promoted piece
@@ -192,7 +170,6 @@ int board[128];
 	0000 1000 0000 0000 0000 0000       double pawn flag
 	0001 0000 0000 0000 0000 0000       enpassant flag
 	0010 0000 0000 0000 0000 0000       castling
-
 */
 
 // decode move's source square
@@ -216,24 +193,6 @@ int board[128];
 // decode move's castling flag
 #define get_move_castling(move) ((move >> 21) & 0x1)
 
-// convert board square indexes to coordinates
-char* square_to_coords[] = {
-	"a8", "b8", "c8", "d8", "e8", "f8", "g8", "h8", "i8", "j8", "k8", "l8", "m8", "n8", "o8", "p8",
-	"a7", "b7", "c7", "d7", "e7", "f7", "g7", "h7", "i7", "j7", "k7", "l7", "m7", "n7", "o7", "p7",
-	"a6", "b6", "c6", "d6", "e6", "f6", "g6", "h6", "i6", "j6", "k6", "l6", "m6", "n6", "o6", "p6",
-	"a5", "b5", "c5", "d5", "e5", "f5", "g5", "h5", "i5", "j5", "k5", "l5", "m5", "n5", "o5", "p5",
-	"a4", "b4", "c4", "d4", "e4", "f4", "g4", "h4", "i4", "j4", "k4", "l4", "m4", "n4", "o4", "p4",
-	"a3", "b3", "c3", "d3", "e3", "f3", "g3", "h3", "i3", "j3", "k3", "l3", "m3", "n3", "o3", "p3",
-	"a2", "b2", "c2", "d2", "e2", "f2", "g2", "h2", "i2", "j2", "k2", "l2", "m2", "n2", "o2", "p2",
-	"a1", "b1", "c1", "d1", "e1", "f1", "g1", "h1", "i1", "j1", "k1", "l1", "m1", "n1", "o1", "p1"
-};
-
-// piece move offsets
-int knight_offsets[8] = { 33, 31, 18, 14, -33, -31, -18, -14 };
-int bishop_offsets[4] = { 15, 17, -15, -17 };
-int rook_offsets[4] = { 16, -16, 1, -1 };
-int king_offsets[8] = { 16, -16, 1, -1, 15, 17, -15, -17 };
-
 struct SMoves {
 	int count = 0;
 	int moves[256]{};
@@ -244,6 +203,18 @@ struct SMoves {
 
 static U64 GetTimeMs() {
 	return (clock() * 1000) / CLOCKS_PER_SEC;
+}
+
+static string SquareToUci(const int sq) {
+	string str;
+	str += 'a' + (sq % 16);
+	str += '1' + (7 - sq / 16);
+	return str;
+}
+
+// most valuable victim _ less valuable attacker
+inline int MVV_LVA(int attacker, int victim) {
+	return piece_values[victim] - piece_values[attacker] / 100;
 }
 
 static int CharToPiece(char c) {
@@ -268,12 +239,8 @@ static void ResetBoard() {
 }
 
 // is square attacked
-static inline int is_square_attacked(int square, int side)
-{
-	// pawn attacks
-	if (!side)
-	{
-		// if target square is on board and is white pawn
+static inline int is_square_attacked(int square, int side) {
+	if (!side) {
 		if (!((square + 17) & 0x88) && (board[square + 17] == P))
 			return 1;
 
@@ -335,31 +302,18 @@ static inline int is_square_attacked(int square, int side)
 		int target_square = square + bishop_offsets[index];
 
 		// loop over attack ray
-		while (!(target_square & 0x88))
-		{
-			// target piece
+		while (!(target_square & 0x88)) {
 			int target_piece = board[target_square];
-
-			// if target piece is either white or black bishop or queen
 			if (!side ? (target_piece == B || target_piece == Q) : (target_piece == b || target_piece == q))
 				return 1;
-
-			// break if hit a piece
 			if (target_piece)
 				break;
-
-			// increment target square by move offset
 			target_square += bishop_offsets[index];
 		}
 	}
-
-	// rook & queen attacks
 	for (int index = 0; index < 4; index++)
 	{
-		// init target square
 		int target_square = square + rook_offsets[index];
-
-		// loop over attack ray
 		while (!(target_square & 0x88)) {
 			int target_piece = board[target_square];
 			if (!side ? (target_piece == R || target_piece == Q) : (target_piece == r || target_piece == q))
@@ -372,31 +326,20 @@ static inline int is_square_attacked(int square, int side)
 	return 0;
 }
 
-// move generator
-static inline void generate_moves(SMoves* move_list)
-{
-	// reset move count
+//move generator
+static inline void generate_moves(SMoves* move_list) {
 	move_list->count = 0;
-
-	// loop over all board squares
 	for (int square = 0; square < 128; square++)
 	{
-		// check if the square is on board
 		if (!(square & 0x88))
 		{
-			// white pawn and castling moves
 			if (!side)
 			{
-				// white pawn moves
 				if (board[square] == P)
 				{
-					// init target square
 					int to_square = square - 16;
-
-					// quite white pawn moves (check if target square is on board)
 					if (!(to_square & 0x88) && !board[to_square])
 					{
-						// pawn promotions
 						if (square >= a7 && square <= h7)
 						{
 							move_list->AddMove(square, to_square, Q, 0, 0, 0, 0);
@@ -407,10 +350,7 @@ static inline void generate_moves(SMoves* move_list)
 
 						else
 						{
-							// one square ahead pawn move
 							move_list->AddMove(square, to_square, 0, 0, 0, 0, 0);
-
-							// two squares ahead pawn move
 							if ((square >= a2 && square <= h2) && !board[square - 32])
 								move_list->AddMove(square, square - 32, 0, 0, 1, 0, 0);
 						}
@@ -845,23 +785,20 @@ static inline int MakeMove(int move, int capture_flag) {
 		}
 
 		else
-			// legal move
 			return 1;
 	}
 	else
 	{
-		// if move is a capture
 		if (get_move_capture(move))
 			return MakeMove(move, all_moves);
 
 		else
-			// move is not a capture
 			return 0;
 	}
 }
 
 
-//perft driver
+//performance test driver
 static inline void PerftDriver(int depth) {
 	SMoves move_list[1];
 	generate_moves(move_list);
@@ -878,45 +815,26 @@ static inline void PerftDriver(int depth) {
 	}
 }
 
-//put thousands separators in the given integer
-string ThousandSeparator(uint64_t n) {
-	string ans = "";
-	string num = to_string(n);
-
-	// Initialise count
-	int count = 0;
-
-	// Traverse the string in reverse
-	for (int i = (int)num.size() - 1; i >= 0; i--) {
-		ans.push_back(num[i]);
-
-		// If three characters
-		// are traversed
-		if (++count == 3) {
-			ans.push_back(' ');
-			count = 0;
-		}
-	}
-
-	// Reverse the string to get
-	// the desired output
-	reverse(ans.begin(), ans.end());
-
-	// If the given string is
-	// less than 1000
-	if (ans.size() % 4 == 0)
-		ans.erase(ans.begin());
-	return ans;
+static int ShrinkNumber(U64 n) {
+	if (n < 10000)
+		return 0;
+	if (n < 10000000)
+		return 1;
+	if (n < 10000000000)
+		return 2;
+	return 3;
 }
 
-void PrintSummary(U64 time, U64 nodes) {
-	if (time < 1)
-		time = 1;
-	U64 nps = (nodes * 1000) / time;
+//displays a summary
+static void PrintSummary(U64 time, U64 nodes) {
+	U64 nps = (nodes * 1000) / max(time, 1ull);
+	const char* units[] = { "", "k", "m", "g" };
+	int sn = ShrinkNumber(nps);
+	U64 p = (int)pow(10, sn * 3);
 	printf("-----------------------------\n");
-	cout << "Time        : " << ThousandSeparator(time) << endl;
-	cout << "Nodes       : " << ThousandSeparator(nodes) << endl;
-	cout << "Nps         : " << ThousandSeparator(nps) << endl;
+	printf("Time        : %llu\n", time);
+	printf("Nodes       : %llu\n", nodes);
+	printf("Nps         : %llu (%llu%s/s)\n", nps, nps / p, units[sn]);
 	printf("-----------------------------\n");
 }
 
@@ -930,11 +848,9 @@ void ResetInfo() {
 	info.timeStart = GetTimeMs();
 }
 
-// evaluation of the position
+//evaluation of the position
 static inline int evaluate_position() {
 	int score = 0;
-
-	// loop over board squares
 	for (int square = 0; square < 128; square++)
 	{
 		// make sure square is on board
@@ -988,85 +904,24 @@ static inline int evaluate_position() {
 	return !side ? score : -score;
 }
 
-
-/***********************************************\
-
-				 SEARCH FUNCTIONS
-
-\***********************************************/
-
-// most valuable victim & less valuable attacker
-
-/*
-
-	(Victims) Pawn Knight Bishop   Rook  Queen   King
-  (Attackers)
-		Pawn   105    205    305    405    505    605
-	  Knight   104    204    304    404    504    604
-	  Bishop   103    203    303    403    503    603
-		Rook   102    202    302    402    502    602
-	   Queen   101    201    301    401    501    601
-		King   100    200    300    400    500    600
-
-*/
-
-static int mvv_lva[13][13] = {
-	0,   0,   0,   0,   0,   0,   0,  0,   0,   0,   0,   0,   0,
-	0, 105, 205, 305, 405, 505, 605,  105, 205, 305, 405, 505, 605,
-	0, 104, 204, 304, 404, 504, 604,  104, 204, 304, 404, 504, 604,
-	0, 103, 203, 303, 403, 503, 603,  103, 203, 303, 403, 503, 603,
-	0, 102, 202, 302, 402, 502, 602,  102, 202, 302, 402, 502, 602,
-	0, 101, 201, 301, 401, 501, 601,  101, 201, 301, 401, 501, 601,
-	0, 100, 200, 300, 400, 500, 600,  100, 200, 300, 400, 500, 600,
-
-	0, 105, 205, 305, 405, 505, 605,  105, 205, 305, 405, 505, 605,
-	0, 104, 204, 304, 404, 504, 604,  104, 204, 304, 404, 504, 604,
-	0, 103, 203, 303, 403, 503, 603,  103, 203, 303, 403, 503, 603,
-	0, 102, 202, 302, 402, 502, 602,  102, 202, 302, 402, 502, 602,
-	0, 101, 201, 301, 401, 501, 601,  101, 201, 301, 401, 501, 601,
-	0, 100, 200, 300, 400, 500, 600,  100, 200, 300, 400, 500, 600
-};
-
-// killer moves [id][ply]
-int killer_moves[2][64];
-
-// history moves [piece][square]
-int history_moves[13][128];
-
-// PV moves
-int pv_table[64][64];
-int pv_length[64];
-
 // score move for move ordering
 static inline int score_move(int ply, int move) {
 	if (pv_table[0][ply] == move)
 		return 20000;
-	int score;
-	score = mvv_lva[board[get_move_from(move)]][board[get_move_to(move)]];
-
-	// on capture
+	int sou = get_move_from(move);
+	int des = get_move_to(move);
+	int ps = board[sou];
+	int pd = board[des];
+	int score = MVV_LVA(ps, pd);
 	if (get_move_capture(move))
-	{
-		// add 10000 to current score
 		score += 10000;
-	}
-
-	// on quiete move
 	else {
-		// on 1st killer move
 		if (killer_moves[0][ply] == move)
-			// score 9000
 			score = 9000;
-
-		// on 2nd killer move
 		else if (killer_moves[1][ply] == move)
-			// score 8000
 			score = 8000;
-
-		// on history move (previous alpha's best score)
 		else
-			// score with history depth
-			score = history_moves[board[get_move_from(move)]][get_move_to(move)] + 7000;
+			score = history_moves[ps][des] + 7000;
 	}
 	return score;
 }
@@ -1078,7 +933,6 @@ static inline void sort_moves(int ply, SMoves* move_list) {
 	for (int mf = 0; mf < move_list->count; mf++) {
 		for (int next = mf + 1; next < move_list->count; next++)
 		{
-			// order moves descending
 			if (move_scores[mf] < move_scores[next])
 			{
 				// swap scores
@@ -1095,16 +949,6 @@ static inline void sort_moves(int ply, SMoves* move_list) {
 	}
 }
 
-static string MoveToUCI(int move) {
-	string uci_move = "";
-	uci_move += square_to_coords[get_move_from(move)];
-	uci_move += square_to_coords[get_move_to(move)];
-	char promo = promotedPieces[get_move_promo(move)];
-	if (promo != '_')
-		uci_move += promo;
-	return uci_move;
-}
-
 static bool CheckUp() {
 	if ((++info.nodes & 0xffff) == 0) {
 		if (info.timeLimit && GetTimeMs() - info.timeStart > info.timeLimit)
@@ -1115,142 +959,29 @@ static bool CheckUp() {
 	return info.stop;
 }
 
-//quiescence search
-static inline int SearchQuiescence(int alpha, int beta, int depth, int ply) {
-	if (CheckUp())
-		return 0;
-	int eval = evaluate_position();
-	if (eval >= beta)
-		return beta;
-	if (eval > alpha)
-		alpha = eval;
-	SMoves move_list[1];
-	generate_moves(move_list);
-	sort_moves(ply, move_list);
-	for (int count = 0; count < move_list->count; count++)
-	{
-		// copy board state
-		copy_board();
-		if (!MakeMove(move_list->moves[count], only_captures))
-			continue;
-
-		// recursive call
-		int score = -SearchQuiescence(-beta, -alpha, depth - 1, ply + 1);
-
-		// restore board state
-		take_back();
-		if (info.stop)
-			return 0;
-		if (alpha < score)
-			alpha = score;
-		if (alpha >= beta)
-			return beta;
-	}
-	return alpha;
-}
-
-//negamax search
-static inline int SearchAlpha(int alpha, int beta, int depth, int ply) {
-	int legal_moves = 0;
-	pv_length[ply] = ply;
-	int in_check = is_square_attacked(king_square[side], side ^ 1);
-	if (in_check)
-		depth++;
-	if (depth < 1)
-		return SearchQuiescence(alpha, beta, depth, ply);
-	if (CheckUp())
-		return 0;
-	int  mate_value = MATE - ply;
-	if (alpha < -mate_value) alpha = -mate_value;
-	if (beta > mate_value - 1) beta = mate_value - 1;
-	if (alpha >= beta) return alpha;
-	SMoves move_list[1];
-	generate_moves(move_list);
-	sort_moves(ply, move_list);
-	for (int count = 0; count < move_list->count; count++) {
-		copy_board();
-		if (!MakeMove(move_list->moves[count], all_moves))
-			continue;
-		legal_moves++;
-		int score = -SearchAlpha(-beta, -alpha, depth - 1, ply + 1);
-		take_back();
-		if (info.stop)
-			return 0;
-
-		// alpha acts like max in MiniMax
-		if (alpha < score){
-			alpha = score;
-			history_moves[board[get_move_from(move_list->moves[count])]][get_move_to(move_list->moves[count])] += depth;
-			pv_table[ply][ply] = move_list->moves[count];
-
-			for (int i = ply + 1; i < pv_length[ply + 1]; i++)
-				pv_table[ply][i] = pv_table[ply + 1][i];
-			pv_length[ply] = pv_length[ply + 1];
-			if (!ply && info.post) {
-				U64 elapsed = GetTimeMs() - info.timeStart;
-				cout << "info depth " << depth << " score ";
-				if (abs(score) < MATE - MAX_PLY)
-					cout << "cp " << score;
-				else
-					cout << "mate " << (score > 0 ? (MATE - score + 1) >> 1 : -(MATE + score) >> 1);
-				cout << " time " << elapsed << " nodes " << info.nodes << " pv ";
-				for (int i = 0; i < pv_length[0]; i++)
-					cout << MoveToUCI(pv_table[0][i]) << " ";
-				cout << endl;
-			}
-			if (alpha >= beta) {
-				killer_moves[1][ply] = killer_moves[0][ply];
-				killer_moves[0][ply] = move_list->moves[count];
-				break;
-			}
-		}
-	}
-	if (!legal_moves)
-		return in_check ? ply - MATE : 0;
-	return alpha;
-}
-
-//search position
-static void SearchIterate() {
-	memset(pv_table, 0, sizeof(pv_table));
-	memset(killer_moves, 0, sizeof(killer_moves));
-	memset(history_moves, 0, sizeof(history_moves));
-	int score;
-	for (int depth = 1; depth <= info.depthLimit; depth++) {
-		score = SearchAlpha(-MATE, MATE, depth, 0);
-		if (info.stop)
-			break;
-		if (info.timeLimit && clock() - info.timeStart > info.timeLimit / 2)
-			break;
-	}
-	if (info.post)
-		cout << "bestmove " << MoveToUCI(pv_table[0][0]) << endl;
+static string MoveToUCI(int move) {
+	string uci_move = "";
+	uci_move += SquareToUci(get_move_from(move));
+	uci_move += SquareToUci(get_move_to(move));
+	char promo = promotedPieces[get_move_promo(move)];
+	if (promo != '_')
+		uci_move += promo;
+	return uci_move;
 }
 
 //parse move (from UCI)
-int UciToMove(const char* move_str) {
+static int UciToMove(const char* move_str) {
 	SMoves move_list[1];
 	generate_moves(move_list);
 	int parse_from = (move_str[0] - 'a') + (8 - (move_str[1] - '0')) * 16;
 	int parse_to = (move_str[2] - 'a') + (8 - (move_str[3] - '0')) * 16;
 	int prom_piece = 0;
 	int move;
-
-	// loop over generated moves
-	for (int count = 0; count < move_list->count; count++)
-	{
-		// pick up move
+	for (int count = 0; count < move_list->count; count++) {
 		move = move_list->moves[count];
-
-		// if input move is present in the move list
-		if (get_move_from(move) == parse_from && get_move_to(move) == parse_to)
-		{
-			// init promoted piece
+		if (get_move_from(move) == parse_from && get_move_to(move) == parse_to) {
 			prom_piece = get_move_promo(move);
-
-			// if promoted piece is present compare it with promoted piece from user input
-			if (prom_piece)
-			{
+			if (prom_piece) {
 				if ((prom_piece == N || prom_piece == n) && move_str[4] == 'n')
 					return move;
 
@@ -1269,6 +1000,117 @@ int UciToMove(const char* move_str) {
 		}
 	}
 	return 0;
+}
+
+//quiescence search
+static inline int SearchQuiescence(int alpha, int beta, int depth, int ply) {
+	if (CheckUp())
+		return 0;
+	int eval = evaluate_position();
+	if (ply >= MAX_PLY)
+		return eval;
+	if (alpha < eval)
+		alpha = eval;
+	if (alpha >= beta)
+		return beta;
+	SMoves move_list[1];
+	generate_moves(move_list);
+	sort_moves(ply, move_list);
+	for (int count = 0; count < move_list->count; count++) {
+		copy_board();
+		if (!MakeMove(move_list->moves[count], only_captures))
+			continue;
+		int score = -SearchQuiescence(-beta, -alpha, depth - 1, ply + 1);
+		take_back();
+		if (info.stop)
+			return 0;
+		if (alpha < score)
+			alpha = score;
+		if (alpha >= beta)
+			return beta;
+	}
+	return alpha;
+}
+
+//negamax search
+static inline int SearchAlpha(int alpha, int beta, int depth, int ply) {
+	int legal_moves = 0;
+	int in_check = is_square_attacked(king_square[side], side ^ 1);
+	if (in_check)
+		depth++;
+	if (depth < 1)
+		return SearchQuiescence(alpha, beta, depth, ply);
+	if (CheckUp())
+		return 0;
+	if (ply >= MAX_PLY - 1)
+		return evaluate_position();
+	pv_length[ply] = ply;
+	int  mate_value = MATE - ply;
+	if (alpha < -mate_value) alpha = -mate_value;
+	if (beta > mate_value-1) beta = mate_value-1;
+	if (alpha >= beta) return alpha;
+	SMoves move_list[1];
+	generate_moves(move_list);
+	sort_moves(ply, move_list);
+	for (int n = 0; n < move_list->count; n++) {
+		int move = move_list->moves[n];
+		copy_board();
+		if (!MakeMove(move, all_moves))
+			continue;
+		legal_moves++;
+		int score = -SearchAlpha(-beta, -alpha, depth - 1, ply + 1);
+		take_back();
+		if (info.stop)
+			return 0;
+		if (alpha < score) {
+			history_moves[board[get_move_from(move)]][get_move_to(move)] += depth;
+
+			alpha = score;
+			if (alpha >= beta) {
+				killer_moves[1][ply] = killer_moves[0][ply];
+				killer_moves[0][ply] = move;
+				return beta;
+			}
+
+			pv_table[ply][ply] = move;
+			for (int j = ply + 1; j < pv_length[ply + 1]; ++j)
+				pv_table[ply][j] = pv_table[ply + 1][j];
+			pv_length[ply] = pv_length[ply + 1];
+
+			if (!ply && info.post) {
+				U64 elapsed = GetTimeMs() - info.timeStart;
+				cout << "info depth " << depth << " score ";
+				if (abs(score) < MATE - MAX_PLY)
+					cout << "cp " << score;
+				else
+					cout << "mate " << (score > 0 ? (MATE - score + 1) >> 1 : -(MATE + score) >> 1);
+				cout << " time " << elapsed << " nodes " << info.nodes << " pv";
+				for (int i = 0; i < pv_length[0]; i++)
+					cout << " " << MoveToUCI(pv_table[0][i]);
+				cout << endl;
+			}
+		}
+	}
+	if (!legal_moves)
+		return in_check ? ply - MATE : 0;
+	return alpha;
+}
+
+//search position
+static void SearchIterate() {
+	memset(pv_table, 0, sizeof(pv_table));
+	memset(killer_moves, 0, sizeof(killer_moves));
+	memset(history_moves, 0, sizeof(history_moves));
+	int score;
+	for (int depth = 1; depth <= info.depthLimit; depth++) {
+		score = SearchAlpha(-MATE, MATE, depth, 0);
+		if (info.stop)
+			break;
+		if (info.timeLimit && GetTimeMs() - info.timeStart > info.timeLimit / 2)
+			break;
+	}
+	if (info.post)
+		cout << "bestmove " << MoveToUCI(pv_table[0][0]) << endl;
 }
 
 static void SetFen(string fen) {
@@ -1329,25 +1171,7 @@ static void SetFen(string fen) {
 	}
 }
 
-static void PrintMoves() {
-	SMoves move_list[1];
-	generate_moves(move_list);
-	printf("\n    Move     Capture  Double   Enpass   Castling\n\n");
-
-	// loop over moves in a movelist
-	for (int index = 0; index < move_list->count; index++)
-	{
-		int move = move_list->moves[index];
-		printf("    %s%s", square_to_coords[get_move_from(move)], square_to_coords[get_move_to(move)]);
-		printf("%c    ", get_move_promo(move) ? promotedPieces[get_move_promo(move)] : ' ');
-		printf("%d        %d        %d        %d\n", get_move_capture(move), get_move_pawn(move), get_move_enpassant(move), get_move_castling(move));
-	}
-
-	printf("\n    Total moves: %d\n\n", move_list->count);
-}
-
 static void PrintBoard() {
-	PrintMoves();
 	const char* s = "   +---+---+---+---+---+---+---+---+\n";
 	const char* t = "     A   B   C   D   E   F   G   H\n";
 	cout << t;
@@ -1362,18 +1186,16 @@ static void PrintBoard() {
 	}
 	cout << s;
 	cout << t << endl;
-
-	// print board stats
 	printf("    Side:     %s\n", (side == white) ? "white" : "black");
 	printf("    Castling:  %c%c%c%c\n", (castle & KC) ? 'K' : '-',
 		(castle & QC) ? 'Q' : '-',
 		(castle & kc) ? 'k' : '-',
 		(castle & qc) ? 'q' : '-');
-	printf("    Enpassant:   %s\n", (enpassant == no_sq) ? "no" : square_to_coords[enpassant]);
-	printf("    King square: %s\n\n", square_to_coords[king_square[side]]);
+	printf("    Enpassant:   %s\n", (enpassant == no_sq) ? "no" : SquareToUci(enpassant).c_str());
+	printf("    King square: %s\n\n", SquareToUci(king_square[side]).c_str());
 }
 
-void PrintPerformanceHeader() {
+static void PrintPerformanceHeader() {
 	printf("-----------------------------\n");
 	printf("ply      time        nodes\n");
 	printf("-----------------------------\n");
@@ -1396,8 +1218,8 @@ static void UciBench() {
 	PrintSummary(elapsed, info.nodes);
 }
 
-// start performance test
-static inline void UciPerformance() {
+//start performance test
+static void UciPerformance() {
 	ResetInfo();
 	PrintPerformanceHeader();
 	SetFen(START_FEN);
@@ -1407,7 +1229,7 @@ static inline void UciPerformance() {
 	while (elapsed < 3000) {
 		PerftDriver(info.depthLimit++);
 		elapsed = GetTimeMs() - info.timeStart;
-		printf("%4d %8lld %12lld\n", info.depthLimit, elapsed, info.nodes);
+		printf("%4d %8llu %12llu\n", info.depthLimit, elapsed, info.nodes);
 	}
 	PrintSummary(elapsed, info.nodes);
 }
@@ -1474,27 +1296,20 @@ static void ParseGo(string command) {
 }
 
 void UciCommand(string command) {
-	if (command == "uci")
-		cout << "id name " << NAME << endl << "uciok" << endl;
-	else if (command == "isready")
-		cout << "readyok" << endl;
-	else if (command.substr(0, 8) == "position")
-		ParsePosition(command);
-	else if (command.substr(0, 2) == "go")
-		ParseGo(command);
-	else if (command == "print")
-		PrintBoard();
-	else if (command == "perft")
-		UciPerformance();
-	else if (command == "bench")
-		UciBench();
-	else if (command == "quit")
-		exit(0);
+	if (command == "uci")cout << "id name " << NAME << endl << "uciok" << endl;
+	else if (command == "isready")cout << "readyok" << endl;
+	else if (command == "print")PrintBoard();
+	else if (command == "perft")UciPerformance();
+	else if (command == "bench")UciBench();
+	else if (command == "quit")exit(0);
+	else if (command.substr(0, 8) == "position")ParsePosition(command);
+	else if (command.substr(0, 2) == "go")ParseGo(command);
 }
 
 static void UciLoop() {
-	//UciCommand("position startpos moves g1f3 d7d5 g2g3 g8f6 f1g2 g7g6 e2e3 b8c6 d2d4 c8f5 f3e5 d8d6 c2c4 c6e5 d4e5 d6e5 f2f4 e5d6 c4d5 a7a5 b1c3 d6b4 d1e2 h7h5 e3e4 f5g4 e2d2 e8c8 e4e5 f6d7 a2a3 b4b6 b2b4 a5b4 a3b4 b6b4 a1a8 d7b8 c1a3 b4b6 c3a4 b6b1 e1f2 b1b5 a4c3 b5b6 d2e3 b6e3 f2e3 h8h7 h1c1 g4d7 c1d1 e7e6 a3f8 d8f8 c3e4 d7b5 d5e6 f7e6 e4c5 c7c6 c5e6 f8g8 g2h3 h7h8 a8a7 b5a6 e6c5 c8c7 d1b1 g8c8 c5a6 b8a6 a7b7 c7d8 b1d1 d8e8 h3d7 e8f8 d7c8 a6c7 b7c7 f8e8 c8b7 h8h7 b7c6 h7d7 d1d7 e8f8");
-	//UciCommand("go depth 3");
+	//UciCommand("position fen 5Q2/6R1/6P1/8/2p5/P1K3k1/8/8 b - - 0 57");
+	//UciCommand("go movetime 30000");
+	//UciCommand("go depth 100");
 	string line;
 	while (true) {
 		getline(cin, line);
