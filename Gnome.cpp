@@ -899,8 +899,6 @@ static inline int evaluate_position() {
 
 		}
 	}
-
-	// return positive score for white & negative for black
 	return !side ? score : -score;
 }
 
@@ -970,7 +968,7 @@ static string MoveToUCI(int move) {
 }
 
 //parse move (from UCI)
-static int UciToMove(const char* move_str) {
+static int UciToMove3(string move_str) {
 	SMoves move_list[1];
 	generate_moves(move_list);
 	int parse_from = (move_str[0] - 'a') + (8 - (move_str[1] - '0')) * 16;
@@ -998,6 +996,18 @@ static int UciToMove(const char* move_str) {
 			}
 			return move;
 		}
+	}
+	return 0;
+}
+
+//parse move (from UCI)
+static int UciToMove(string uci) {
+	SMoves move_list;
+	generate_moves(&move_list);
+	for (int i = 0; i < move_list.count; i++) {
+		int move = move_list.moves[i];
+		if (MoveToUCI(move) == uci)
+			return move;
 	}
 	return 0;
 }
@@ -1034,6 +1044,9 @@ static inline int SearchQuiescence(int alpha, int beta, int depth, int ply) {
 
 //negamax search
 static inline int SearchAlpha(int alpha, int beta, int depth, int ply) {
+	if (ply >= MAX_PLY - 1)
+		return evaluate_position();
+	pv_length[ply] = ply;
 	int legal_moves = 0;
 	int in_check = is_square_attacked(king_square[side], side ^ 1);
 	if (in_check)
@@ -1042,9 +1055,7 @@ static inline int SearchAlpha(int alpha, int beta, int depth, int ply) {
 		return SearchQuiescence(alpha, beta, depth, ply);
 	if (CheckUp())
 		return 0;
-	if (ply >= MAX_PLY - 1)
-		return evaluate_position();
-	pv_length[ply] = ply;
+	
 	int  mate_value = MATE - ply;
 	if (alpha < -mate_value) alpha = -mate_value;
 	if (beta > mate_value-1) beta = mate_value-1;
@@ -1252,7 +1263,7 @@ static void ParsePosition(string command) {
 	}
 	SetFen(fen);
 	while (ss >> token) {
-		int move = UciToMove(token.c_str());
+		int move = UciToMove(token);
 		MakeMove(move, all_moves);
 	}
 }
