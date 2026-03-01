@@ -13,3 +13,7 @@
     <img src="https://img.shields.io/github/v/release/Thibor/Gnome?color=blue&label=Latest%20release&style=for-the-badge">
     <img src="https://img.shields.io/github/last-commit/Thibor/Gnome?color=critical&style=for-the-badge">
 </div>
+
+## Features
+
+- board 16x8

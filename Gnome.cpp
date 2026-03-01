@@ -345,8 +345,7 @@ static inline void GenerateMoves(Position* pos, SMoves* move_list) {
 							move_list->AddMove(square, square + 32, 0, 0, 1, 0, 0);
 					}
 				}
-				for (int index = 0; index < 4; index++)
-				{
+				for (int index = 0; index < 4; index++){
 					int pawn_offset = bishop_offsets[index];
 					if (pawn_offset > 0)
 					{
@@ -369,24 +368,15 @@ static inline void GenerateMoves(Position* pos, SMoves* move_list) {
 					}
 				}
 			}
-			if (pos->board[square] == k)
-			{
+			if (pos->board[square] == k){
 				if (pos->castle & kc)
-				{
 					if (!pos->board[f8] && !pos->board[g8])
-					{
 						if (!IsSquareAttacked(pos, e8, white) && !IsSquareAttacked(pos, f8, white))
 							move_list->AddMove(e8, g8, 0, 0, 0, 0, 1);
-					}
-				}
 				if (pos->castle & qc)
-				{
 					if (!pos->board[d8] && !pos->board[b8] && !pos->board[c8])
-					{
 						if (!IsSquareAttacked(pos, e8, white) && !IsSquareAttacked(pos, d8, white))
 							move_list->AddMove(e8, c8, 0, 0, 0, 0, 1);
-					}
-				}
 			}
 		}
 		if (!pos->side ? pos->board[square] == N : pos->board[square] == n) {
