@@ -48,7 +48,7 @@ enum castling { KC = 1, QC = 2, kc = 4, qc = 8 };
 // sides to move
 enum sides { white, black };
 
-struct SearchInfo{
+struct SearchInfo {
 	bool post;
 	bool stop;
 	int depthLimit;
@@ -77,7 +77,7 @@ struct SMoves {
 string pieces = " ANBRQKanbrqk";
 string promotedPieces = "__nbrq__nbrq_";
 
-const int material_score[13] = { 0,100,320,330,500,900,10000,-100,-320,-330,-500,-900,-10000 };
+const int material_score[13] = { 0,100,320,330,500,900,0,-100,-320,-330,-500,-900,0 };
 const int piece_values[13] = { 0, 100, 200, 300, 400, 500, 600, 100, 200, 300, 400, 500,600 };
 
 int castling_rights[128] = {
@@ -573,40 +573,38 @@ void ResetInfo() {
 }
 
 //evaluation of the position
-static inline int evaluate_position(Position* pos) {
+static inline int EvalPosition(Position* pos) {
 	int score = 0;
 	for (int square = 0; square < 128; square++) {
-		if (!(square & 0x88)) {
-			int piece = pos->board[square];
-			score += material_score[piece];
-			switch (piece) {
-			case P:
-				score += pawn_score[square];
-				if (pos->board[square - 16] == P)
-					score -= 64;
-				break;
-			case N: score += knight_score[square]; break;
-			case B: score += bishop_score[square]; break;
-			case R: score += rook_score[square]; break;
-			case K: score += king_score[square]; break;
-			case p:
-				score -= pawn_score[mirror_score[square]];
-				if (pos->board[square + 16] == p)
-					score += 64;
-				break;
-			case n: score -= knight_score[mirror_score[square]]; break;
-			case b: score -= bishop_score[mirror_score[square]]; break;
-			case r: score -= rook_score[mirror_score[square]]; break;
-			case k: score -= king_score[mirror_score[square]]; break;
-			}
-
+		if (square & 0x88)continue;
+		int piece = pos->board[square];
+		score += material_score[piece];
+		switch (piece) {
+		case P:
+			score += pawn_score[square];
+			if (pos->board[square - 16] == P)
+				score -= 64;
+			break;
+		case N: score += knight_score[square]; break;
+		case B: score += bishop_score[square]; break;
+		case R: score += rook_score[square]; break;
+		case K: score += king_score[square]; break;
+		case p:
+			score -= pawn_score[mirror_score[square]];
+			if (pos->board[square + 16] == p)
+				score += 64;
+			break;
+		case n: score -= knight_score[mirror_score[square]]; break;
+		case b: score -= bishop_score[mirror_score[square]]; break;
+		case r: score -= rook_score[mirror_score[square]]; break;
+		case k: score -= king_score[mirror_score[square]]; break;
 		}
 	}
 	return !pos->side ? score : -score;
 }
 
 //score move for move ordering
-static inline int ScoreMove(Position* pos, int ply, int move) {
+static inline int EvalMove(Position* pos, int ply, int move) {
 	if (pv_table[0][ply] == move)
 		return 20000;
 	int sou = get_move_from(move);
@@ -630,23 +628,17 @@ static inline int ScoreMove(Position* pos, int ply, int move) {
 static inline void SortMoves(Position* pos, int ply, SMoves* move_list) {
 	int move_scores[0xff];
 	for (int mf = 0; mf < move_list->count; mf++)
-		move_scores[mf] = ScoreMove(pos, ply, move_list->moves[mf]);
+		move_scores[mf] = EvalMove(pos, ply, move_list->moves[mf]);
 	for (int mf = 0; mf < move_list->count; mf++) {
 		for (int next = mf + 1; next < move_list->count; next++)
-		{
-			if (move_scores[mf] < move_scores[next])
-			{
-				// swap scores
+			if (move_scores[mf] < move_scores[next]) {
 				int temp_score = move_scores[mf];
 				move_scores[mf] = move_scores[next];
 				move_scores[next] = temp_score;
-
-				// swap corresponding moves
 				int temp_move = move_list->moves[mf];
 				move_list->moves[mf] = move_list->moves[next];
 				move_list->moves[next] = temp_move;
 			}
-		}
 	}
 }
 
@@ -670,7 +662,7 @@ static string MoveToUCI(int move) {
 	return uci_move;
 }
 
-//parse move (from UCI)
+//parse move from UCI
 static int UciToMove(Position* pos, string uci) {
 	SMoves move_list;
 	GenerateMoves(pos, &move_list);
@@ -686,7 +678,7 @@ static int UciToMove(Position* pos, string uci) {
 static inline int SearchQuiescence(Position* pos, int alpha, int beta, int depth, int ply) {
 	if (CheckUp())
 		return 0;
-	int eval = evaluate_position(pos);
+	int eval = EvalPosition(pos);
 	if (ply >= MAX_PLY)
 		return eval;
 	if (alpha < eval)
@@ -714,7 +706,7 @@ static inline int SearchQuiescence(Position* pos, int alpha, int beta, int depth
 //negamax search
 static inline int SearchAlpha(Position* pos, int alpha, int beta, int depth, int ply) {
 	if (ply >= MAX_PLY - 1)
-		return evaluate_position(pos);
+		return EvalPosition(pos);
 	pv_length[ply] = ply;
 	int legal_moves = 0;
 	int in_check = IsSquareAttacked(pos, pos->king_square[pos->side], pos->side ^ 1);
@@ -977,7 +969,7 @@ static void ParseGo(Position* pos, string command) {
 	SearchIterate(pos);
 }
 
-void UciCommand(Position* pos, string command) {
+static void UciCommand(Position* pos, string command) {
 	if (command == "uci")cout << "id name " << NAME << endl << "uciok" << endl;
 	else if (command == "isready")cout << "readyok" << endl;
 	else if (command == "ucinewgame")UciNewGame();
