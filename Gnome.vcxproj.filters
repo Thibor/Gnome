@@ -15,7 +15,7 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="Gnome.cpp">
+    <ClCompile Include="gnome.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

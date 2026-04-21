@@ -14,6 +14,13 @@
     <img src="https://img.shields.io/github/last-commit/Thibor/Gnome?color=critical&style=for-the-badge">
 </div>
 
+FIDE-rules-compliant chess engine
+
 ## Features
 
-- board 16x8
+- Single file
+- Board: 16x8
+- En passant
+- Underpromotions (knight, bishop, rook)
+- 50-move rule
+- Stalemate and checkmate reported correctly to the GUI

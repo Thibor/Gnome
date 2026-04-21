@@ -1,13 +1,11 @@
 #include <iostream>
 #include <sstream>
-#include <vector>
 
 using namespace std;
 
-#define INF 32001
 #define MATE 32000
 #define MAX_PLY 64
-#define S64 signed __int64
+#define U8 unsigned __int8
 #define U64 unsigned __int64
 #define NAME "Gnome"
 #define VERSION "2026-02-08"
@@ -48,7 +46,7 @@ enum Piece { P, N, B, R, Q, K, p, n, b, r, q, k, e, o };
 struct SearchInfo {
 	bool post;
 	bool stop;
-	int depthLimit;
+	U8 depthLimit;
 	U64 timeStart;
 	U64 timeLimit;
 	U64 nodes;
@@ -56,11 +54,12 @@ struct SearchInfo {
 }info;
 
 struct Position {
-	int color;
-	int castle;
-	int enpassant;
-	int king_square[2];
-	int board[128];
+	U8 move50;
+	U8 color;
+	U8 castle;
+	U8 enpassant;
+	U8 king_square[2];
+	U8 board[128];
 };
 
 struct SMoves {
@@ -73,7 +72,6 @@ struct SMoves {
 
 string Piece = "ANBRQKanbrqk ";
 string promotedPieces = "_nbrq__nbrq__";
-//string promotedPieces = "1nbrq23nbrq45";
 
 const int material_score[13] = { 100,320,330,500,900,0,-100,-320,-330,-500,-900,0 };
 const int piece_values[13] = { 100, 200, 300, 400, 500, 600, 100, 200, 300, 400, 500,600 };
@@ -184,7 +182,7 @@ static U64 GetTimeMs() {
 }
 
 static int MakePiece(int c, PieceType pt) {
-	return c ? pt + 6 : pt;
+	return c ? p + pt : P + pt;
 }
 
 static string SquareToUci(const int sq) {
@@ -196,7 +194,7 @@ static string SquareToUci(const int sq) {
 
 // most valuable victim _ less valuable attacker
 inline static int MVV_LVA(int attacker, int victim) {
-	return piece_values[victim] - piece_values[attacker] / 100;
+	return piece_values[victim] - piece_values[attacker] / 10;
 }
 
 //reset board
@@ -284,10 +282,8 @@ static PieceType TypeOf(int piece) {
 }
 
 static void AddPromotionMoves(SMoves* move_list, int sqSou, int sqDes, int color, int capture) {
-	move_list->AddMove(sqSou, sqDes, MakePiece(color, QUEEN), capture, 0, 0, 0);
-	move_list->AddMove(sqSou, sqDes, MakePiece(color, ROOK), capture, 0, 0, 0);
-	move_list->AddMove(sqSou, sqDes, MakePiece(color, BISHOP), capture, 0, 0, 0);
-	move_list->AddMove(sqSou, sqDes, MakePiece(color, KNIGHT), capture, 0, 0, 0);
+	for (int pt = KNIGHT; pt < KING; pt++)
+		move_list->AddMove(sqSou, sqDes, MakePiece(color, PieceType(pt)), capture, 0, 0, 0);
 }
 
 static void AddPawnAttack(Position* pos, SMoves* move_list, int sqSou, int sqDes, int colorUs) {
@@ -433,7 +429,12 @@ static inline int MakeMove(Position* pos, int move, int capture_flag) {
 		int enpass = get_move_enpassant(move);
 		int double_push = get_move_pawn(move);
 		int Castling = get_move_castling(move);
-		pos->board[sq_to] = pos->board[sq_from];
+		pos->move50++;
+		int piece = pos->board[sq_from];
+		int captured = pos->board[sq_to];
+		if (captured != e || piece == PAWN)
+			pos->move50 = 0;
+		pos->board[sq_to] = piece;
 		pos->board[sq_from] = e;
 		if (promoted_piece != e)
 			pos->board[sq_to] = promoted_piece;
@@ -553,7 +554,8 @@ static inline int EvalPosition(Position* pos) {
 		case k: score -= king_score[mirror_score[square]]; break;
 		}
 	}
-	return !pos->color ? score : -score;
+	score = pos->color==WHITE ? score : -score;
+	return (100 - pos->move50) * score / 100;
 }
 
 //score move for move ordering
@@ -655,7 +657,7 @@ static void PrintBoard(Position* pos) {
 static void PrintMoveList(Position* pos) {
 	SMoves move_list[1];
 	GenerateMoves(pos, move_list);
-	SortMoves(pos,0, move_list);
+	SortMoves(pos, 0, move_list);
 	for (int i = 0; i < move_list->count; i++) {
 		int move = move_list->moves[i];
 		int promo = get_move_promo(move);
@@ -705,10 +707,12 @@ static inline int SearchAlpha(Position* pos, int alpha, int beta, int depth, int
 	pv_length[ply] = ply;
 	int in_check = IsSquareAttacked(pos, pos->king_square[pos->color], pos->color ^ 1);
 	if (in_check)
-		depth++;
+		depth = max(1, depth + 1);
 	if (depth < 1)
 		return SearchQuiescence(pos, alpha, beta, depth, ply);
 	if (CheckUp())
+		return 0;
+	if (ply && pos->move50 >= 100)
 		return 0;
 	int  mate_value = MATE - ply;
 	if (alpha < -mate_value) alpha = -mate_value;
@@ -734,15 +738,6 @@ static inline int SearchAlpha(Position* pos, int alpha, int beta, int depth, int
 				pv_table[ply][j] = pv_table[ply + 1][j];
 			pv_length[ply] = pv_length[ply + 1];
 			if (!ply && info.post) {
-				/*if (depth == 6) {
-					cout << MoveToUCI(move) << endl;
-					cout << in_check << endl;
-					Position npos2 = *pos;
-					bool mm = MakeMove(&npos2, move, all_moves);
-					cout << mm << endl;
-					PrintBoard(pos);
-					GenerateMoves(pos, move_list);
-				}*/
 				U64 elapsed = GetTimeMs() - info.timeStart;
 				cout << "info depth " << depth << " score ";
 				if (abs(score) < MATE - MAX_PLY)
@@ -848,6 +843,8 @@ static void SetFen(Position* pos, string fen) {
 		int rank = 7 - (word[1] - '1');
 		pos->enpassant = rank * 16 + file;
 	}
+	ss >> word;
+	pos->move50 = stoi(word);
 }
 
 //start benchmark
