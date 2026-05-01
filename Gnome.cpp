@@ -62,7 +62,7 @@ struct Position {
 	U8 board[128];
 };
 
-struct SMoves {
+struct Moves {
 	int count = 0;
 	int moves[256]{};
 	void AddMove(int source, int target, int promo, int capture, int doublePush, int enpassant, int Castling) {
@@ -281,12 +281,12 @@ static PieceType TypeOf(int piece) {
 	return PT_NB;
 }
 
-static void AddPromotionMoves(SMoves* move_list, int sqSou, int sqDes, int color, int capture) {
+static void AddPromotionMoves(Moves* move_list, int sqSou, int sqDes, int color, int capture) {
 	for (int pt = KNIGHT; pt < KING; pt++)
 		move_list->AddMove(sqSou, sqDes, MakePiece(color, PieceType(pt)), capture, 0, 0, 0);
 }
 
-static void AddPawnAttack(Position* pos, SMoves* move_list, int sqSou, int sqDes, int colorUs) {
+static void AddPawnAttack(Position* pos, Moves* move_list, int sqSou, int sqDes, int colorUs) {
 	if (sqDes & 0x88)
 		return;
 	int rank = sqSou / 16;
@@ -304,7 +304,7 @@ static void AddPawnAttack(Position* pos, SMoves* move_list, int sqSou, int sqDes
 		move_list->AddMove(sqSou, sqDes, e, 1, 0, 0, 0);
 }
 
-static void AddPawnMoves(Position* pos, SMoves* move_list, int sqSou) {
+static void AddPawnMoves(Position* pos, Moves* move_list, int sqSou) {
 	int colorUs = pos->color;
 	int rank = sqSou / 16;
 	if (colorUs == WHITE)
@@ -327,7 +327,7 @@ static void AddPawnMoves(Position* pos, SMoves* move_list, int sqSou) {
 }
 
 //move generator
-static inline void GenerateMoves(Position* pos, SMoves* move_list) {
+static inline void GenerateMoves(Position* pos, Moves* move_list) {
 	move_list->count = 0;
 	for (int square = 0; square < 128; square++) {
 		if (square & 0x88)
@@ -479,7 +479,7 @@ static inline int MakeMove(Position* pos, int move, int capture_flag) {
 
 //performance test driver
 static inline void PerftDriver(Position* pos, int depth) {
-	SMoves move_list[1];
+	Moves move_list[1];
 	GenerateMoves(pos, move_list);
 	for (int move_count = 0; move_count < move_list->count; move_count++)
 	{
@@ -580,7 +580,7 @@ static inline int EvalMove(Position* pos, int ply, int move) {
 	return score;
 }
 
-static inline void SortMoves(Position* pos, int ply, SMoves* move_list) {
+static inline void SortMoves(Position* pos, int ply, Moves* move_list) {
 	int move_scores[0xff];
 	for (int mf = 0; mf < move_list->count; mf++)
 		move_scores[mf] = EvalMove(pos, ply, move_list->moves[mf]);
@@ -619,7 +619,7 @@ static string MoveToUCI(int move) {
 
 //parse move from UCI
 static int UciToMove(Position* pos, string uci) {
-	SMoves move_list;
+	Moves move_list;
 	GenerateMoves(pos, &move_list);
 	for (int i = 0; i < move_list.count; i++) {
 		int move = move_list.moves[i];
@@ -655,7 +655,7 @@ static void PrintBoard(Position* pos) {
 }
 
 static void PrintMoveList(Position* pos) {
-	SMoves move_list[1];
+	Moves move_list[1];
 	GenerateMoves(pos, move_list);
 	SortMoves(pos, 0, move_list);
 	for (int i = 0; i < move_list->count; i++) {
@@ -682,7 +682,7 @@ static inline int SearchQuiescence(Position* pos, int alpha, int beta, int depth
 		alpha = eval;
 	if (alpha >= beta)
 		return beta;
-	SMoves move_list[1];
+	Moves move_list[1];
 	GenerateMoves(pos, move_list);
 	SortMoves(pos, ply, move_list);
 	for (int count = 0; count < move_list->count; count++) {
@@ -719,7 +719,7 @@ static inline int SearchAlpha(Position* pos, int alpha, int beta, int depth, int
 	if (beta > mate_value - 1) beta = mate_value - 1;
 	if (alpha >= beta) return alpha;
 	int legal_moves = 0;
-	SMoves move_list[1];
+	Moves move_list[1];
 	GenerateMoves(pos, move_list);
 	SortMoves(pos, ply, move_list);
 	for (int n = 0; n < move_list->count; n++) {
