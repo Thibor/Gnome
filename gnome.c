@@ -770,8 +770,8 @@ static int SearchAlpha(Position* pos, int alpha, int beta, int depth, int ply) {
 		if (!legalMoves)
 			score = -SearchAlpha(&npos, -beta, -alpha, depth - 1, ply + 1);
 		else {
-			int BLACK_ROOK = legalMoves >> 2;
-			score = -SearchAlpha(&npos, -alpha - 1, -alpha, depth - 1 - BLACK_ROOK, ply + 1);
+			int r = legalMoves >> 2;
+			score = -SearchAlpha(&npos, -alpha - 1, -alpha, depth - 1 - r, ply + 1);
 			if (BLACK_ROOK && score > alpha)
 				score = -SearchAlpha(&npos, -alpha - 1, -alpha, depth - 1, ply + 1);
 			if (score > alpha && score < beta)

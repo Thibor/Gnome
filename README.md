@@ -20,7 +20,7 @@ FIDE-rules-compliant chess engine
 
 - Elo 2300
 - Protocol UCI
-- Single file C
+- Single C file
 - Board: 16x8
 - En passant
 - Underpromotions (knight, bishop, rook)
