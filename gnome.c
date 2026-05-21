@@ -14,8 +14,8 @@
 #define U64 unsigned __int64
 #define FALSE 0
 #define TRUE 1
-#define NAME "Unicorn"
-#define VERSION "2026-03-24"
+#define NAME "Gnome"
+#define VERSION "2026-05-22"
 #define START_FEN "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 #define FLIP(sq) ((sq)^0b111000)
 
@@ -87,11 +87,12 @@ int dirStart[PT_NB] = { 0,8,0,4,0,0 };
 int dirCount[PT_NB] = { 0,8,4,4,8,8 };
 int dirSlide[PT_NB] = { 0,0,1,1,1,0 };
 int phaseVal[PT_NB] = { 0,1,1,2,4,0 };
+int insufVal[PT_NB] = { 3,1,2,3,3,0 };
 U64 keys[KEYS_COUNT];
 Stack stack[MAX_PLY];
-int mg_value[6] = { 82, 337, 365, 477, 1025, 0 };
-int eg_value[6] = { 94, 281, 297, 512,  936, 0 };
-int mm_value[6] = { 94, 337, 365, 477, 1025, 0 };
+int mg_material[6] = { 82, 337, 365, 477, 1025, 0 };
+int eg_material[6] = { 94, 281, 297, 512,  936, 0 };
+int mx_material[6] = { 94, 337, 365, 477, 1025, 0 };
 const U64 tt_count = 64ULL << 15;
 TTEntry tt[64ULL << 15];
 int board64[128];
@@ -257,9 +258,9 @@ int* eg_table[6] = {
 	eg_king_table
 };
 
-int mg_pst[12][64];
-int eg_pst[12][64];
-int mm_pst[12][64];
+int mg_pst[16][64];
+int eg_pst[16][64];
+int mx_pst[16][64];
 
 static U64 Rand64() {
 	static U64 next = 1;
@@ -275,11 +276,14 @@ static void Init() {
 			board64[y * 16 + x] = y * 8 + x;
 	for (int pt = PAWN; pt <= KING; pt++) {
 		for (int sq = 0; sq < 64; sq++) {
-			int mg = mg_value[pt] + mg_table[pt][sq];
-			int eg = eg_value[pt] + eg_table[pt][sq];
-			mg_pst[pt][sq] = mg_pst[pt + PT_NB][FLIP(sq)] = mg;
-			eg_pst[pt][sq] = eg_pst[pt + PT_NB][FLIP(sq)] = eg;
-			mm_pst[pt][sq] = mm_pst[pt + PT_NB][FLIP(sq)] = max(mg, eg);
+			int mg = mg_material[pt] + mg_table[pt][sq];
+			int eg = eg_material[pt] + eg_table[pt][sq];
+			mg_pst[pt + WHITE][sq] = mg;
+			mg_pst[pt][FLIP(sq)] = -mg;
+			eg_pst[pt + WHITE][sq] = eg;
+			eg_pst[pt][FLIP(sq)] = -eg;
+			mx_pst[pt + WHITE][sq] = max(mg, eg);
+			mx_pst[pt][FLIP(sq)] = max(mg, eg);
 		}
 	}
 }
@@ -316,6 +320,10 @@ static inline char CFileOf(int sq) {
 
 static inline char CRankOf(int sq) {
 	return '1' + (7 - RankOf(sq));
+}
+
+static int PieceTypeOnSquare(const Position* pos, int sq) {
+	return GetPieceType(pos->board[sq]);
 }
 
 static int Distance(int sq1, int sq2) {
@@ -402,12 +410,10 @@ static U64 GetHash(const Position* pos) {
 }
 
 static int IsRepetition(Position* pos, U64 hash) {
-	for (int n = historyCount - 4; n >= historyCount - pos->move50; n -= 2) {
-		if (n < 0)
-			return FALSE;
+	int limit = max(0, historyCount - pos->move50);
+	for (int n = historyCount - 4; n >= limit; n -= 2)
 		if (historyHash[n] == hash)
 			return TRUE;
-	}
 	return FALSE;
 }
 
@@ -449,24 +455,22 @@ static int EvalPosition(Position* pos) {
 	int scoreMg = 0;
 	int scoreEg = 0;
 	int phase = 0;
+	int insufficent[2] = { 0 };
 	for (int y = 0; y < 8; y++)
 		for (int x = 0; x < 8; x++) {
 			int sq = y * 8 + x;
 			int piece = pos->board[y * 16 + x];
-			if (piece != EMPTY) {
-				int pt = GetPieceType(piece);
-				int color = GetPieceColor(piece);
-				phase += phaseVal[pt];
-				if (color == WHITE) {
-					scoreMg += mg_pst[pt][sq];
-					scoreEg += eg_pst[pt][sq];
-				}
-				else {
-					scoreMg -= mg_pst[pt + PT_NB][sq];
-					scoreEg -= eg_pst[pt + PT_NB][sq];
-				}
-			}
+			if (piece == EMPTY)continue;
+			int pt = GetPieceType(piece);
+			int color = GetPieceColor(piece);
+			int pc = piece & 0xf;
+			phase += phaseVal[pt];
+			insufficent[color == BLACK] += insufVal[pt];
+			scoreMg += mg_pst[pc][sq];
+			scoreEg += eg_pst[pc][sq];
 		}
+	if (max(insufficent[0], insufficent[1]) < 3)
+		return 0;
 	if (phase > 24) phase = 24;
 	int score = (scoreMg * phase + scoreEg * (24 - phase)) / 24;
 	score = (score * (100 - pos->move50)) / 100;
@@ -634,7 +638,7 @@ static void PrintBoard(Position* pos) {
 	printf(t);
 	for (int rank = 0; rank < 8; rank++) {
 		printf(s);
-		printf(" %d |", 8-rank);
+		printf(" %d |", 8 - rank);
 		for (int file = 0; file < 8; file++) {
 			int sq = rank * 16 + file;
 			int piece = pos->board[sq];
@@ -647,7 +651,7 @@ static void PrintBoard(Position* pos) {
 			else
 				printf("   |");
 		}
-		printf(" %d \n", 8-rank);
+		printf(" %d \n", 8 - rank);
 	}
 	printf(s);
 	printf(t);
@@ -689,13 +693,13 @@ static int EvalMove(Position* pos, Move* bst, Move* m) {
 	int ptSou = GetPieceType(pSou);
 	int ptDes = GetPieceType(pDes);
 	int piece = pos->color == WHITE ? ptSou : ptSou + PT_NB;
-	int score = mm_pst[piece][board64[m->to]] - mm_pst[piece][board64[m->from]];
+	int score = mx_pst[piece][board64[m->to]] - mx_pst[piece][board64[m->from]];
 	if ((m->from == bst->from) && (m->to == bst->to))
 		score += 10000;
 	if (m->promo < PT_NB)
-		score += mm_value[m->promo] - mm_value[PAWN];
+		score += mx_material[m->promo] - mx_material[PAWN];
 	if (pDes)
-		score += 10 * mm_value[ptDes] - mm_value[ptSou];
+		score += 10 * mx_material[ptDes] - mx_material[ptSou];
 	return score;
 }
 
@@ -770,7 +774,7 @@ static int SearchAlpha(Position* pos, int alpha, int beta, int depth, int ply) {
 		if (!legalMoves)
 			score = -SearchAlpha(&npos, -beta, -alpha, depth - 1, ply + 1);
 		else {
-			int r = legalMoves >> 2;
+			int r = legalMoves / 13 + depth / 14;
 			score = -SearchAlpha(&npos, -alpha - 1, -alpha, depth - 1 - r, ply + 1);
 			if (BLACK_ROOK && score > alpha)
 				score = -SearchAlpha(&npos, -alpha - 1, -alpha, depth - 1, ply + 1);
@@ -1027,11 +1031,13 @@ static void ParsePosition(char* ptr) {
 	historyCount = 0;
 	if (strcmp(token, "moves") == 0)
 		while (1) {
-			historyHash[historyCount++] = GetHash(&pos);
 			ptr = ParseToken(ptr, token);
 			if (*token == '\0')
 				break;
 			Move m = UciToMove(token);
+			if (PieceTypeOnSquare(&pos, m.to) != PT_NB || PieceTypeOnSquare(&pos, m.from) == PAWN)
+				historyCount = 0;
+			historyHash[historyCount++] = GetHash(&pos);
 			MakeMove(&pos, &m);
 		}
 }
