@@ -4,7 +4,7 @@
 <img src="/Resources/gnome.png" />
     <br>
     <br>
-    <b><i>Single file small uci chess engine 2300 elo.</i></b>
+    <b><i>Single file small uci chess engine 2500 elo.</i></b>
     <br>
     <br>
     <img src="https://img.shields.io/github/downloads/Thibor/Gnome/total?color=critical&style=for-the-badge">
@@ -18,10 +18,11 @@ FIDE-rules-compliant chess engine
 
 ## Features
 
-- Elo 2300
+- Strength 2500 elo
 - Protocol UCI
-- Single C file
-- Board: 16x8
+- Single file
+- Evaluation 12 Piece Square Tables
+- Board 16x8 squares
 - En passant
 - Underpromotions (knight, bishop, rook)
 - Threefold repetition
