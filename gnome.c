@@ -21,7 +21,7 @@
 #define NAME "Gnome"
 #define VERSION "2026-05-22"
 #define START_FEN "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
-#define FLIP_SQ(sq) ((sq)^0b111000)
+#define FLIP_SQ(sq) ((sq) ^ 0x38)
 
 enum Color { EMPTY = 0, WHITE = 8, BLACK = 16, COLOR_MASK = WHITE | BLACK };
 enum PieceType { PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING, PT_NB };
